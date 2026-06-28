@@ -1,5 +1,25 @@
 import { useState, useMemo } from "react";
 
+// ── API HELPER ────────────────────────────────────────────────────────────────
+async function callClaude(payload) {
+  const res = await fetch("/api/claude", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const errMsg = data.error === "API_KEY_MISSING"
+      ? "⚠️ API Key eksik! Vercel > Settings > Environment Variables > ANTHROPIC_API_KEY ekle."
+      : data.error === "ANTHROPIC_API_ERROR"
+      ? `❌ Anthropic API Hatası (${data.status}): ${data.message}`
+      : `🔴 Sunucu Hatası: ${data.message}`;
+    throw new Error(errMsg);
+  }
+  return data.content?.map(i => i.text || "").join("") || "";
+}
+
+
 const C = {
   bg:"#060D14", navy:"#0A1628", iron:"#0E1E2E", panel:"#0C1822",
   card:"#101F30", amber:"#F0A500", amberDim:"#F0A50015",
@@ -45,30 +65,13 @@ const MODULES = [
 const fmt = n => n>=1000000?`$${(n/1e6).toFixed(2)}M`:n>=1000?`$${(n/1000).toFixed(0)}K`:`$${n}`;
 const today = () => new Date().toISOString().split("T")[0];
 
-const DEMO_LEADS = [
-  {id:1,company:"Al-Mashariq Mining Co.",contact:"Ahmed Al-Rashid",country:"Suudi Arabistan",region:"Orta Doğu",sector:"Madencilik",productType:"Yeni Makine",product:"Komatsu PC800",value:1250000,stage:"Teklif Verildi",whatsapp:"+966501234567",email:"ahmed@almashariq.sa",phone:"+966501234567",notes:"2 adet talep etti.",created:"2026-04-10",lastContact:"2026-06-20",lat:24.7,lng:46.7},
-  {id:2,company:"Kazmunaigas Infra",contact:"Dmitri Volkov",country:"Kazakistan",region:"Orta Asya",sector:"Petrol & Gaz",productType:"Yedek Parça",product:"CAT 390F Parça",value:85000,stage:"Müzakere",whatsapp:"+77011234567",email:"d.volkov@kmgi.kz",phone:"+77011234567",notes:"%8 iskonto talep etti.",created:"2026-05-02",lastContact:"2026-06-22",lat:48.0,lng:66.9},
-  {id:3,company:"Balkan Roads d.o.o.",contact:"Marko Petrović",country:"Sırbistan",region:"Avrupa",sector:"Yol Yapım",productType:"Yeni Makine",product:"Dynapac CC6200",value:180000,stage:"Kazanıldı",whatsapp:"+381641234567",email:"m.petrovic@balkanroads.rs",phone:"+381641234567",notes:"Sözleşme imzalandı.",created:"2026-03-20",lastContact:"2026-06-10",lat:44.0,lng:21.0},
-  {id:4,company:"Tarkwa Gold Mine Ltd.",contact:"Kwame Asante",country:"Gana",region:"Sahra Altı Afrika",sector:"Madencilik",productType:"Yeni Makine",product:"Liebherr T264",value:2800000,stage:"Lead",whatsapp:"+233241234567",email:"k.asante@tarkwagold.gh",phone:"+233241234567",notes:"Büyük proje.",created:"2026-06-15",lastContact:"2026-06-15",lat:5.5,lng:-2.0},
-  {id:5,company:"Baghdad Infrastructure",contact:"Omar Al-Faruq",country:"Irak",region:"Orta Doğu",sector:"İnşaat",productType:"İkinci El Makine",product:"Volvo EC480",value:420000,stage:"İletişime Geçildi",whatsapp:"+9647901234567",email:"omar@baghdad-infra.iq",phone:"+9647901234567",notes:"LinkedIn'den geldi.",created:"2026-06-18",lastContact:"2026-06-24",lat:33.3,lng:44.4},
-];
+const DEMO_LEADS = [];
 
-const DEMO_STOK = [
-  {id:1,kod:"YP-CAT-001",ad:"CAT 390F Motor Filtresi",kategori:"Yedek Parça",marka:"Caterpillar",adet:45,birimFiyat:280,depo:"İstanbul",kritikSeviye:10},
-  {id:2,kod:"YP-KOM-002",ad:"Komatsu PC800 Hidrolik Pompa",kategori:"Yedek Parça",marka:"Komatsu",adet:3,birimFiyat:12500,depo:"Ankara",kritikSeviye:2},
-  {id:3,kod:"YP-VOL-003",ad:"Volvo EC380 Bucket Diş Seti",kategori:"Aksesuar",marka:"Volvo",adet:120,birimFiyat:85,depo:"İstanbul",kritikSeviye:20},
-];
+const DEMO_STOK = [];
 
-const DEMO_FINANS = [
-  {id:1,tip:"Gelir",kategori:"Makine Satışı",tutar:180000,tarih:"2026-06-10",aciklama:"Balkan Roads - Dynapac CC6200",durum:"Tahsil Edildi"},
-  {id:2,tip:"Gelir",kategori:"Yedek Parça",tutar:8500,tarih:"2026-06-15",aciklama:"CAT filtre seti",durum:"Bekliyor"},
-  {id:3,tip:"Gider",kategori:"Lojistik",tutar:3200,tarih:"2026-06-12",aciklama:"Sırbistan nakliye",durum:"Ödendi"},
-];
+const DEMO_FINANS = [];
 
-const DEMO_TEKLIFLER = [
-  {id:1,musteri:"Al-Mashariq Mining Co.",urun:"Komatsu PC800 x2",tutar:2500000,tarih:"2026-06-18",durum:"Gönderildi",notlar:"Q3 teslimat."},
-  {id:2,musteri:"Tarkwa Gold Mine",urun:"Liebherr T264 x1",tutar:2900000,tarih:"2026-06-22",durum:"Hazırlanıyor",notlar:"Büyük proje."},
-];
+const DEMO_TEKLIFLER = [];
 
 const b = (bg,color,ex={}) => ({background:bg,color,border:"none",borderRadius:6,padding:"8px 18px",cursor:"pointer",fontSize:13,fontWeight:700,...ex});
 const ob = (color) => ({background:"transparent",color,border:`1px solid ${color}33`,borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:600});
@@ -134,10 +137,12 @@ function CommandCenter({leads, setActive}) {
     setBriefingLoading(true);
     const prompt = `Günaydın Duran. ile başla. Global iş makinesi satışı için kısa sabah brifing yaz (Türkçe, 5-6 madde, emoji kullan). Aktif leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}`;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
-      const data = await res.json();
-      setBriefing(data.content?.map(i=>i.text||"").join("")||"");
-    } catch(e){setBriefing("Bağlantı hatası.");}
+      const text = await callClaude({max_tokens:600,messages:[{role:"user",content:prompt}]});
+      setBriefing(text);
+    } catch(e){
+      console.error("Briefing error:", e);
+      setBriefing("❌ " + (e.message || "Bağlantı hatası"));
+    }
     setBriefingLoading(false);
   }
 
@@ -145,10 +150,12 @@ function CommandCenter({leads, setActive}) {
     setPrioLoading(true);setPrioOpen(true);
     const prompt = `İş makinesi satış uzmanısın. Bu leadleri öncelik sırasına koy, bugün ne yapılmalı: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa.`;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
-      const data = await res.json();
-      setPriorities(data.content?.map(i=>i.text||"").join("")||"");
-    } catch(e){setPriorities("Bağlantı hatası.");}
+      const text = await callClaude({max_tokens:600,messages:[{role:"user",content:prompt}]});
+      setPriorities(text);
+    } catch(e){
+      console.error("Priorities error:", e);
+      setPriorities("❌ " + (e.message || "Bağlantı hatası"));
+    }
     setPrioLoading(false);
   }
 
@@ -276,11 +283,12 @@ function FirmaBul({onAdd}) {
     const lok=mode==="TR"?`${il}, Türkiye`:ulke;
     const prompt=`${lok} bölgesindeki ${sektor} sektöründe iş makinesi firmaları. SADECE JSON: [{"company":"","contact":"","phone":"","whatsapp":"","email":"","address":"","notes":""}] 10 firma.`;
     try {
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
-      const data=await res.json();
-      const text=data.content?.map(i=>i.text||"").join("")||"";
+      const text = await callClaude({max_tokens:1000,messages:[{role:"user",content:prompt}]});
       setFirmalar(JSON.parse(text.replace(/```json|```/g,"").trim()));
-    } catch(e){setError("Veri alınamadı.");}
+    } catch(e){
+      console.error("FirmaBul error:", e);
+      setError(e.message || "Bilinmeyen hata");
+    }
     setLoading(false);
   }
 
@@ -512,10 +520,12 @@ function AICopilot({leads}) {
     setLoading(true);
     const ctx=`Global iş makinesi satış uzmanısın. Kullanıcı: Duran. Leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa cevap.`;
     try {
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,system:ctx,messages:[{role:"user",content:msg}]})});
-      const data=await res.json();
-      setMsgs(m=>[...m,{role:"assistant",text:data.content?.map(i=>i.text||"").join("")||"Cevap alınamadı."}]);
-    } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Bağlantı hatası."}]);}
+      const text = await callClaude({max_tokens:600,system:ctx,messages:[{role:"user",content:msg}]});
+      setMsgs(m=>[...m,{role:"assistant",text}]);
+    } catch(e){
+      console.error("AI Copilot error:", e);
+      setMsgs(m=>[...m,{role:"assistant",text:"❌ " + (e.message||"Bağlantı hatası")}]);
+    }
     setLoading(false);
   }
 
