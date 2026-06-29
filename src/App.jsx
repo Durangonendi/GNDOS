@@ -1,7 +1,8 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL;
 const SUPABASE_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
+const PASSWORD = "Gndos2026";
 
 async function dbGetLeads() {
   try {
@@ -9,49 +10,51 @@ async function dbGetLeads() {
       headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
     });
     const data = await res.json();
-    return Array.isArray(data) ? data.map(l => ({...l, value: Number(l.value)||0})) : [];
+    return Array.isArray(data) ? data.map(l => ({
+      ...l, value: Number(l.value) || 0,
+      productType: l.product_type || ""
+    })) : [];
   } catch(e) { return []; }
 }
 
-async function dbSaveLead(lead) {
+async function dbInsertLead(lead) {
   try {
-    const body = { company:lead.company, contact:lead.contact, country:lead.country, region:lead.region, sector:lead.sector, product_type:lead.productType, product:lead.product, value:lead.value||0, stage:lead.stage, whatsapp:lead.whatsapp, email:lead.email, phone:lead.phone, notes:lead.notes };
-    if (lead.id && typeof lead.id === 'number' && lead.id > 1000000000) {
-      await fetch(`${SUPABASE_URL}/rest/v1/leads`, { method:"POST", headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json","Prefer":"return=minimal"}, body:JSON.stringify(body) });
-    } else if (lead.id) {
-      await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${lead.id}`, { method:"PATCH", headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json"}, body:JSON.stringify(body) });
-    }
+    await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+      method: "POST",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ company: lead.company, contact: lead.contact, country: lead.country, region: lead.region, sector: lead.sector, product_type: lead.productType, product: lead.product, value: lead.value || 0, stage: lead.stage || "Lead", whatsapp: lead.whatsapp, email: lead.email, phone: lead.phone, notes: lead.notes })
+    });
+  } catch(e) {}
+}
+
+async function dbUpdateLead(id, lead) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ company: lead.company, contact: lead.contact, country: lead.country, region: lead.region, sector: lead.sector, product_type: lead.productType, product: lead.product, value: lead.value || 0, stage: lead.stage, whatsapp: lead.whatsapp, email: lead.email, phone: lead.phone, notes: lead.notes })
+    });
+  } catch(e) {}
+}
+
+async function dbUpdateStage(id, stage) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ stage })
+    });
   } catch(e) {}
 }
 
 async function dbDeleteLead(id) {
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, { method:"DELETE", headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`} });
+    await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, {
+      method: "DELETE",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+    });
   } catch(e) {}
 }
-
-
-
-
-// ── API HELPER ────────────────────────────────────────────────────────────────
-async function callClaude(payload) {
-  const res = await fetch("/api/claude", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    const errMsg = data.error === "API_KEY_MISSING"
-      ? "⚠️ API Key eksik! Vercel > Settings > Environment Variables > ANTHROPIC_API_KEY ekle."
-      : data.error === "ANTHROPIC_API_ERROR"
-      ? `❌ Anthropic API Hatası (${data.status}): ${data.message}`
-      : `🔴 Sunucu Hatası: ${data.message}`;
-    throw new Error(errMsg);
-  }
-  return data.content?.map(i => i.text || "").join("") || "";
-}
-
 
 const C = {
   bg:"#060D14", navy:"#0A1628", iron:"#0E1E2E", panel:"#0C1822",
@@ -98,27 +101,105 @@ const MODULES = [
 const fmt = n => n>=1000000?`$${(n/1e6).toFixed(2)}M`:n>=1000?`$${(n/1000).toFixed(0)}K`:`$${n}`;
 const today = () => new Date().toISOString().split("T")[0];
 
-const DEMO_LEADS = [];
-
-const DEMO_STOK = [];
-
-const DEMO_FINANS = [];
-
-const DEMO_TEKLIFLER = [];
-
-const b = (bg,color,ex={}) => ({background:bg,color,border:"none",borderRadius:6,padding:"8px 18px",cursor:"pointer",fontSize:13,fontWeight:700,...ex});
+const bs = (bg,color,ex={}) => ({background:bg,color,border:"none",borderRadius:6,padding:"8px 18px",cursor:"pointer",fontSize:13,fontWeight:700,...ex});
 const ob = (color) => ({background:"transparent",color,border:`1px solid ${color}33`,borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:600});
-const inp = {background:C.navy,color:C.ghost,border:`1px solid ${C.border}`,borderRadius:6,padding:"9px 12px",fontSize:13,width:"100%",boxSizing:"border-box"};
-const sel = {...inp,cursor:"pointer"};
-const card = (ex={}) => ({background:C.card,border:`1px solid ${C.border}`,borderRadius:10,...ex});
+const cardSt = (ex={}) => ({background:C.card,border:`1px solid ${C.border}`,borderRadius:10,...ex});
 const pill = (color) => ({background:color+"20",color,border:`1px solid ${color}40`,borderRadius:20,padding:"2px 10px",fontSize:11,fontWeight:600,whiteSpace:"nowrap",display:"inline-block"});
 
-function WorldMap({leads}) {
+const inpStyle = {background:C.navy,color:C.ghost,border:`1px solid ${C.border}`,borderRadius:6,padding:"9px 12px",fontSize:14,width:"100%",boxSizing:"border-box",outline:"none"};
+
+// ─── LOGIN ───────────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin }) {
+  const [pass, setPass] = useState("");
+  const [error, setError] = useState(false);
+  function tryLogin() {
+    if (pass === PASSWORD) { onLogin(); }
+    else { setError(true); setTimeout(()=>setError(false), 2000); }
+  }
+  return (
+    <div style={{fontFamily:"'Inter',sans-serif",background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:40,width:320,textAlign:"center"}}>
+        <div style={{fontSize:28,fontWeight:900,letterSpacing:4,color:C.amber,marginBottom:4}}>GNDOS</div>
+        <div style={{fontSize:11,color:C.smoke,letterSpacing:2,marginBottom:32}}>GLOBAL OPS PLATFORM</div>
+        <input type="password" placeholder="Şifre girin..." value={pass}
+          onChange={e=>setPass(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&tryLogin()}
+          style={{...inpStyle,textAlign:"center",letterSpacing:4,marginBottom:12,border:`1px solid ${error?C.rust:C.border}`}}
+        />
+        {error && <div style={{color:C.rust,fontSize:12,marginBottom:8}}>Yanlış şifre!</div>}
+        <button onClick={tryLogin} style={{...bs(C.amber,C.navy),width:"100%",padding:11,fontSize:14}}>Giriş Yap</button>
+        <div style={{fontSize:11,color:C.muted,marginTop:16}}>Sadece yetkili erişim</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LEAD FORM MODAL ─────────────────────────────────────────────────────────
+function LeadFormModal({ editLead, onClose, onSave }) {
+  const [company, setCompany] = useState(editLead?.company || "");
+  const [contact, setContact] = useState(editLead?.contact || "");
+  const [country, setCountry] = useState(editLead?.country || "");
+  const [region, setRegion] = useState(editLead?.region || "Türkiye");
+  const [sector, setSector] = useState(editLead?.sector || "Hafriyat");
+  const [productType, setProductType] = useState(editLead?.productType || "Yeni Makine");
+  const [product, setProduct] = useState(editLead?.product || "");
+  const [value, setValue] = useState(editLead?.value || "");
+  const [stage, setStage] = useState(editLead?.stage || "Lead");
+  const [whatsapp, setWhatsapp] = useState(editLead?.whatsapp || "");
+  const [email, setEmail] = useState(editLead?.email || "");
+  const [phone, setPhone] = useState(editLead?.phone || "");
+  const [notes, setNotes] = useState(editLead?.notes || "");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!company) return;
+    setSaving(true);
+    await onSave({ company, contact, country, region, sector, productType, product, value: Number(value) || 0, stage, whatsapp, email, phone, notes });
+    setSaving(false);
+  }
+
+  const row = {display:"flex",flexDirection:"column",gap:5};
+  const lbl = {fontSize:11,color:C.smoke,fontWeight:600,letterSpacing:0.5};
+  const sel = {...inpStyle,cursor:"pointer"};
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{...cardSt({padding:28}),width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+          <div style={{fontSize:17,fontWeight:800,color:C.amber}}>{editLead?"Lead Düzenle":"Yeni Lead Ekle"}</div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:22}}>✕</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+          <div style={{...row,gridColumn:"1/-1"}}><label style={lbl}>FİRMA ADI *</label><input style={inpStyle} value={company} onChange={e=>setCompany(e.target.value)} placeholder="Firma adı"/></div>
+          <div style={row}><label style={lbl}>İLETİŞİM KİŞİSİ</label><input style={inpStyle} value={contact} onChange={e=>setContact(e.target.value)}/></div>
+          <div style={row}><label style={lbl}>ÜLKE</label><input style={inpStyle} value={country} onChange={e=>setCountry(e.target.value)}/></div>
+          <div style={row}><label style={lbl}>BÖLGE</label><select style={sel} value={region} onChange={e=>setRegion(e.target.value)}>{REGIONS.map(r=><option key={r}>{r}</option>)}</select></div>
+          <div style={row}><label style={lbl}>SEKTÖR</label><select style={sel} value={sector} onChange={e=>setSector(e.target.value)}>{SECTORS.map(s=><option key={s}>{s}</option>)}</select></div>
+          <div style={{...row,gridColumn:"1/-1"}}><label style={lbl}>ÜRÜN / TALEP</label><input style={inpStyle} value={product} onChange={e=>setProduct(e.target.value)}/></div>
+          <div style={row}><label style={lbl}>ÜRÜN TİPİ</label><select style={sel} value={productType} onChange={e=>setProductType(e.target.value)}>{PRODUCT_TYPES.map(p=><option key={p}>{p}</option>)}</select></div>
+          <div style={row}><label style={lbl}>DEĞER ($)</label><input style={inpStyle} type="number" value={value} onChange={e=>setValue(e.target.value)}/></div>
+          <div style={row}><label style={lbl}>AŞAMA</label><select style={sel} value={stage} onChange={e=>setStage(e.target.value)}>{STAGES.map(s=><option key={s}>{s}</option>)}</select></div>
+          <div style={{...row,gridColumn:"1/-1"}}><label style={lbl}>WHATSAPP</label><input style={inpStyle} value={whatsapp} onChange={e=>setWhatsapp(e.target.value)} placeholder="+90..."/></div>
+          <div style={row}><label style={lbl}>E-POSTA</label><input style={inpStyle} value={email} onChange={e=>setEmail(e.target.value)}/></div>
+          <div style={row}><label style={lbl}>TELEFON</label><input style={inpStyle} value={phone} onChange={e=>setPhone(e.target.value)}/></div>
+          <div style={{...row,gridColumn:"1/-1"}}><label style={lbl}>NOTLAR</label><textarea style={{...inpStyle,minHeight:70,resize:"vertical"}} value={notes} onChange={e=>setNotes(e.target.value)}/></div>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:20}}>
+          <button onClick={onClose} style={ob(C.smoke)}>İptal</button>
+          <button onClick={handleSave} disabled={saving} style={bs(C.amber,C.navy,{opacity:saving?0.7:1})}>{saving?"⏳ Kaydediliyor...":"💾 Kaydet"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── WORLD MAP ────────────────────────────────────────────────────────────────
+function WorldMap({ leads }) {
   const toX = lng => ((lng+180)/360)*860;
   const toY = lat => ((90-lat)/180)*400;
   const stageColor = {"Lead":C.smoke,"İletişime Geçildi":C.blue,"Teklif Verildi":C.amber,"Müzakere":C.orange,"Kazanıldı":C.green,"Kaybedildi":C.rust};
   return (
-    <div style={{...card({padding:20,marginBottom:20})}}>
+    <div style={{...cardSt({padding:20,marginBottom:20})}}>
       <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:12}}>🗺️ GLOBAL OPERASYON HARİTASI</div>
       <div style={{background:"#060E18",borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`}}>
         <svg viewBox="0 0 860 400" style={{width:"100%",display:"block"}}>
@@ -132,34 +213,21 @@ function WorldMap({leads}) {
           <path d="M640,220 L710,215 L735,240 L740,280 L720,305 L680,310 L650,290 L630,260 L630,235 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
           {leads.filter(l=>l.lat&&l.lng).map(l => {
             const x=toX(l.lng), y=toY(l.lat), color=stageColor[l.stage]||C.smoke;
-            return (
-              <g key={l.id}>
-                <circle cx={x} cy={y} r="10" fill={color} opacity="0.15"/>
-                <circle cx={x} cy={y} r="5" fill={color} opacity="0.6"/>
-                <circle cx={x} cy={y} r="3" fill={color}/>
-              </g>
-            );
+            return (<g key={l.id}><circle cx={x} cy={y} r="10" fill={color} opacity="0.15"/><circle cx={x} cy={y} r="5" fill={color} opacity="0.6"/><circle cx={x} cy={y} r="3" fill={color}/></g>);
           })}
         </svg>
-      </div>
-      <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
-        {[["Teklif",C.amber],["Müzakere",C.orange],["Kazanıldı",C.green],["Lead",C.smoke]].map(([l,c])=>(
-          <span key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.smoke}}>
-            <span style={{width:7,height:7,borderRadius:"50%",background:c,display:"inline-block"}}/>
-            {l}
-          </span>
-        ))}
       </div>
     </div>
   );
 }
 
-function CommandCenter({leads, setActive}) {
-  const [briefing,setBriefing]=useState("");
-  const [briefingLoading,setBriefingLoading]=useState(false);
-  const [priorities,setPriorities]=useState("");
-  const [prioLoading,setPrioLoading]=useState(false);
-  const [prioOpen,setPrioOpen]=useState(false);
+// ─── COMMAND CENTER ───────────────────────────────────────────────────────────
+function CommandCenter({ leads, setActive, loadLeads }) {
+  const [briefing, setBriefing] = useState("");
+  const [briefingLoading, setBriefingLoading] = useState(false);
+  const [priorities, setPriorities] = useState("");
+  const [prioLoading, setPrioLoading] = useState(false);
+  const [prioOpen, setPrioOpen] = useState(false);
 
   const hour = new Date().getHours();
   const greeting = hour<12?"Günaydın":hour<18?"İyi öğleden sonralar":"İyi akşamlar";
@@ -168,27 +236,23 @@ function CommandCenter({leads, setActive}) {
 
   async function getAIBriefing() {
     setBriefingLoading(true);
-    const prompt = `Günaydın Duran. ile başla. Global iş makinesi satışı için kısa sabah brifing yaz (Türkçe, 5-6 madde, emoji kullan). Aktif leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}`;
+    const prompt = `Günaydın Duran. ile başla. Global iş makinesi satışı için kısa sabah brifing yaz (Türkçe, 5-6 madde, emoji kullan). Leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}`;
     try {
-      const text = await callClaude({max_tokens:600,messages:[{role:"user",content:prompt}]});
-      setBriefing(text);
-    } catch(e){
-      console.error("Briefing error:", e);
-      setBriefing("❌ " + (e.message || "Bağlantı hatası"));
-    }
+      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
+      const data = await res.json();
+      setBriefing(data.content?.map(i=>i.text||"").join("")||"");
+    } catch(e){setBriefing("Bağlantı hatası.");}
     setBriefingLoading(false);
   }
 
   async function getPriorities() {
-    setPrioLoading(true);setPrioOpen(true);
-    const prompt = `İş makinesi satış uzmanısın. Bu leadleri öncelik sırasına koy, bugün ne yapılmalı: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa.`;
+    setPrioLoading(true); setPrioOpen(true);
+    const prompt = `İş makinesi satış uzmanısın. Bu leadleri öncelik sırasına koy: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa.`;
     try {
-      const text = await callClaude({max_tokens:600,messages:[{role:"user",content:prompt}]});
-      setPriorities(text);
-    } catch(e){
-      console.error("Priorities error:", e);
-      setPriorities("❌ " + (e.message || "Bağlantı hatası"));
-    }
+      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
+      const data = await res.json();
+      setPriorities(data.content?.map(i=>i.text||"").join("")||"");
+    } catch(e){setPriorities("Bağlantı hatası.");}
     setPrioLoading(false);
   }
 
@@ -206,7 +270,7 @@ function CommandCenter({leads, setActive}) {
       </div>
 
       {prioOpen && (
-        <div style={{...card({padding:20,marginBottom:20,border:`1px solid ${C.amber}44`,background:C.amberDim})}}>
+        <div style={{...cardSt({padding:20,marginBottom:20,border:`1px solid ${C.amber}44`,background:C.amberDim})}}>
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
             <div style={{fontSize:13,fontWeight:700,color:C.amber}}>🎯 AI ÖNCELİK ANALİZİ</div>
             <button onClick={()=>setPrioOpen(false)} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:18}}>✕</button>
@@ -222,7 +286,7 @@ function CommandCenter({leads, setActive}) {
           {l:"PIPELINE",v:fmt(totalVal),c:C.amber,icon:"💰"},
           {l:"KAZANILAN",v:fmt(leads.filter(l=>l.stage==="Kazanıldı").reduce((a,l)=>a+l.value,0)),c:C.green,icon:"✅"},
         ].map(k=>(
-          <div key={k.l} style={card({padding:16})}>
+          <div key={k.l} style={cardSt({padding:16})}>
             <div style={{fontSize:20,marginBottom:6}}>{k.icon}</div>
             <div style={{fontSize:22,fontWeight:900,color:k.c}}>{k.v}</div>
             <div style={{fontSize:10,color:C.smoke,marginTop:4,letterSpacing:0.8}}>{k.l}</div>
@@ -231,13 +295,13 @@ function CommandCenter({leads, setActive}) {
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-        <div style={card({padding:20})}>
+        <div style={cardSt({padding:20})}>
           <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🟢 BUGÜNKÜ GÖREVLER</div>
           {[
             {text:`${leads.filter(l=>l.stage==="Lead").length} yeni lead aranacak`,icon:"📞",c:C.blue},
             {text:`${hotLeads.length} sıcak fırsat takip edilecek`,icon:"🔥",c:C.orange},
-            {text:`${DEMO_TEKLIFLER.filter(t=>t.durum==="Hazırlanıyor").length} teklif hazırlanacak`,icon:"📄",c:C.amber},
-            {text:`${DEMO_STOK.filter(s=>s.adet<=s.kritikSeviye).length} üründe stok kritik`,icon:"⚠️",c:C.rust},
+            {text:`0 teklif hazırlanacak`,icon:"📄",c:C.amber},
+            {text:`Stok kontrol edilecek`,icon:"⚠️",c:C.rust},
           ].map((t,i)=>(
             <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
               <span>{t.icon}</span><span style={{fontSize:13,flex:1}}>{t.text}</span>
@@ -245,26 +309,26 @@ function CommandCenter({leads, setActive}) {
             </div>
           ))}
         </div>
-        <div style={card({padding:20})}>
+        <div style={cardSt({padding:20})}>
           <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🤖 AI MARKET ALERTS</div>
           {[
-            {text:"Suudi Arabistan'da yeni maden ihalesi açıldı",flag:"🇸🇦",c:C.amber},
-            {text:"Kazakistan'dan 30 gündür cevap yok",flag:"🇰🇿",c:C.rust},
-            {text:"Gana'daki Tarkwa Gold — büyük proje",flag:"🇬🇭",c:C.green},
-            {text:"Irak'ta hafriyat büyüme trendi devam ediyor",flag:"🇮🇶",c:C.blue},
+            {text:"Suudi Arabistan'da yeni maden ihalesi açıldı",flag:"🇸🇦"},
+            {text:"Kazakistan'dan 30 gündür cevap yok",flag:"🇰🇿"},
+            {text:"Gana'daki Tarkwa Gold — büyük proje",flag:"🇬🇭"},
+            {text:"Irak'ta hafriyat büyüme trendi devam ediyor",flag:"🇮🇶"},
           ].map((a,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${a.c}22`,marginBottom:8}}>
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
               <span style={{fontSize:18}}>{a.flag}</span><span style={{fontSize:12,flex:1,lineHeight:1.4}}>{a.text}</span>
             </div>
           ))}
-          <button onClick={getAIBriefing} disabled={briefingLoading} style={{...b(C.blueDim,C.blue,{border:`1px solid ${C.blue}33`,width:"100%",marginTop:4,fontSize:12})}}>
+          <button onClick={getAIBriefing} disabled={briefingLoading} style={{...bs(C.blueDim,C.blue,{border:`1px solid ${C.blue}33`,width:"100%",marginTop:4,fontSize:12})}}>
             {briefingLoading?"⏳ Hazırlanıyor...":"📋 AI Sabah Brifing'i Al"}
           </button>
         </div>
       </div>
 
       {briefing && (
-        <div style={{...card({padding:20,marginBottom:20,border:`1px solid ${C.blue}33`,background:C.blueDim})}}>
+        <div style={{...cardSt({padding:20,marginBottom:20,border:`1px solid ${C.blue}33`,background:C.blueDim})}}>
           <div style={{fontSize:12,fontWeight:700,color:C.blue,marginBottom:12}}>🤖 AI SABAH BRİFİNG</div>
           <div style={{fontSize:14,lineHeight:1.8,whiteSpace:"pre-wrap"}}>{briefing}</div>
         </div>
@@ -272,25 +336,27 @@ function CommandCenter({leads, setActive}) {
 
       <WorldMap leads={leads}/>
 
-      <div style={card({padding:20,marginBottom:20})}>
-        <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🔥 SICAK FIRSATLAR</div>
-        {hotLeads.map(l=>(
-          <div key={l.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:C.panel,borderRadius:8,border:`1px solid ${SC[l.stage]}33`,marginBottom:8}}>
-            <div>
-              <div style={{fontWeight:700,fontSize:14}}>{l.company}</div>
-              <div style={{fontSize:12,color:C.smoke}}>🌍 {l.country} · {l.sector}</div>
+      {hotLeads.length > 0 && (
+        <div style={cardSt({padding:20,marginBottom:20})}>
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🔥 SICAK FIRSATLAR</div>
+          {hotLeads.map(l=>(
+            <div key={l.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:C.panel,borderRadius:8,border:`1px solid ${SC[l.stage]}33`,marginBottom:8}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:14}}>{l.company}</div>
+                <div style={{fontSize:12,color:C.smoke}}>🌍 {l.country} · {l.sector}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:16,fontWeight:800,color:C.amber}}>{fmt(l.value)}</div>
+                <span style={pill(SC[l.stage])}>{l.stage}</span>
+              </div>
             </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:16,fontWeight:800,color:C.amber}}>{fmt(l.value)}</div>
-              <span style={pill(SC[l.stage])}>{l.stage}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
         {MODULES.map(m=>(
-          <button key={m.key} onClick={()=>setActive(m.key)} style={{...card({padding:"16px 12px",cursor:"pointer",textAlign:"center",display:"block",width:"100%",border:`1px solid ${C.border}`})}} >
+          <button key={m.key} onClick={()=>setActive(m.key)} style={{...cardSt({padding:"16px 12px",cursor:"pointer",textAlign:"center",display:"block",width:"100%",border:`1px solid ${C.border}`})}} >
             <div style={{fontSize:28,marginBottom:6}}>{m.icon}</div>
             <div style={{fontSize:11,fontWeight:700,color:C.ghost}}>{m.label}</div>
           </button>
@@ -300,7 +366,8 @@ function CommandCenter({leads, setActive}) {
   );
 }
 
-function FirmaBul({onAdd}) {
+// ─── FIRMA BUL ────────────────────────────────────────────────────────────────
+function FirmaBul({ onAdd }) {
   const [mode,setMode]=useState("TR");
   const [il,setIl]=useState("İstanbul");
   const [sektor,setSektor]=useState("Hafriyat");
@@ -314,14 +381,13 @@ function FirmaBul({onAdd}) {
   async function ara() {
     setLoading(true);setFirmalar([]);setAdded({});setError("");
     const lok=mode==="TR"?`${il}, Türkiye`:ulke;
-    const prompt=`${lok} bölgesindeki ${sektor} sektöründe iş makinesi firmaları. SADECE JSON: [{"company":"","contact":"","phone":"","whatsapp":"","email":"","address":"","notes":""}] 10 firma.`;
+    const prompt=`${lok} bölgesindeki ${sektor} sektöründe iş makinesi firmaları. SADECE JSON:\n[{"company":"","contact":"","phone":"","whatsapp":"","email":"","address":"","notes":""}]\n10 firma, gerçekçi isimler.`;
     try {
-      const text = await callClaude({max_tokens:1000,messages:[{role:"user",content:prompt}]});
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
+      const data=await res.json();
+      const text=data.content?.map(i=>i.text||"").join("")||"";
       setFirmalar(JSON.parse(text.replace(/```json|```/g,"").trim()));
-    } catch(e){
-      console.error("FirmaBul error:", e);
-      setError(e.message || "Bilinmeyen hata");
-    }
+    } catch(e){setError("API bağlantısı yok. API key gerekli.");}
     setLoading(false);
   }
 
@@ -329,39 +395,39 @@ function FirmaBul({onAdd}) {
     <div>
       <div style={{display:"flex",gap:10,marginBottom:20}}>
         {[["TR","🇹🇷 Türkiye"],["GLOBAL","🌍 Global"]].map(([k,v])=>(
-          <button key={k} onClick={()=>setMode(k)} style={b(mode===k?C.amber:C.card,mode===k?C.navy:C.smoke,{border:`1px solid ${mode===k?C.amber:C.border}`})}>{v}</button>
+          <button key={k} onClick={()=>setMode(k)} style={bs(mode===k?C.amber:C.card,mode===k?C.navy:C.smoke,{border:`1px solid ${mode===k?C.amber:C.border}`})}>{v}</button>
         ))}
       </div>
       <div style={{display:"flex",gap:12,marginBottom:18,flexWrap:"wrap",alignItems:"flex-end"}}>
         {mode==="TR"?(
           <div style={{display:"flex",flexDirection:"column",gap:5}}>
             <label style={{fontSize:11,color:C.smoke}}>İL</label>
-            <select value={il} onChange={e=>setIl(e.target.value)} style={{...sel,width:150}}>{TR_ILLER.map(i=><option key={i}>{i}</option>)}</select>
+            <select value={il} onChange={e=>setIl(e.target.value)} style={{...inpStyle,width:150,cursor:"pointer"}}>{TR_ILLER.map(i=><option key={i}>{i}</option>)}</select>
           </div>
         ):(
           <>
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
               <label style={{fontSize:11,color:C.smoke}}>BÖLGE</label>
-              <select value={region} onChange={e=>{setRegion(e.target.value);setUlke(ULKELER[e.target.value]?.[0]||"");}} style={sel}>{Object.keys(ULKELER).map(r=><option key={r}>{r}</option>)}</select>
+              <select value={region} onChange={e=>{setRegion(e.target.value);setUlke(ULKELER[e.target.value]?.[0]||"");}} style={{...inpStyle,cursor:"pointer"}}>{Object.keys(ULKELER).map(r=><option key={r}>{r}</option>)}</select>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
               <label style={{fontSize:11,color:C.smoke}}>ÜLKE</label>
-              <select value={ulke} onChange={e=>setUlke(e.target.value)} style={sel}>{(ULKELER[region]||[]).map(u=><option key={u}>{u}</option>)}</select>
+              <select value={ulke} onChange={e=>setUlke(e.target.value)} style={{...inpStyle,cursor:"pointer"}}>{(ULKELER[region]||[]).map(u=><option key={u}>{u}</option>)}</select>
             </div>
           </>
         )}
         <div style={{display:"flex",flexDirection:"column",gap:5}}>
           <label style={{fontSize:11,color:C.smoke}}>SEKTÖR</label>
-          <select value={sektor} onChange={e=>setSektor(e.target.value)} style={sel}>{SECTORS.map(s=><option key={s}>{s}</option>)}</select>
+          <select value={sektor} onChange={e=>setSektor(e.target.value)} style={{...inpStyle,cursor:"pointer"}}>{SECTORS.map(s=><option key={s}>{s}</option>)}</select>
         </div>
-        <button onClick={ara} disabled={loading} style={b(C.amber,C.navy,{padding:"10px 24px",alignSelf:"flex-end",opacity:loading?0.7:1})}>{loading?"⏳ Aranıyor...":"🔍 Firma Ara"}</button>
+        <button onClick={ara} disabled={loading} style={bs(C.amber,C.navy,{padding:"10px 24px",alignSelf:"flex-end",opacity:loading?0.7:1})}>{loading?"⏳ Aranıyor...":"🔍 Firma Ara"}</button>
       </div>
       {error&&<div style={{color:C.rust,padding:12,background:C.rustDim,borderRadius:6,marginBottom:12}}>{error}</div>}
       {loading&&<div style={{textAlign:"center",padding:48,color:C.smoke}}><div style={{fontSize:36,marginBottom:8}}>⚙️</div><div>{mode==="TR"?il:ulke} · {sektor} aranıyor...</div></div>}
       {firmalar.length>0&&(
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           {firmalar.map((f,i)=>(
-            <div key={i} style={{...card({padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16,border:`1px solid ${added[i]?C.green:C.border}`})}}>
+            <div key={i} style={{...cardSt({padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16,border:`1px solid ${added[i]?C.green:C.border}`})}}>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>{f.company}</div>
                 {f.address&&<div style={{fontSize:12,color:C.smoke,marginBottom:4}}>📍 {f.address}</div>}
@@ -373,7 +439,7 @@ function FirmaBul({onAdd}) {
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {f.whatsapp&&<a href={`https://wa.me/${(f.whatsapp||"").replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{...ob("#25D366"),textDecoration:"none",textAlign:"center"}}>WA</a>}
-                <button onClick={()=>{onAdd({company:f.company,contact:f.contact||"",country:mode==="TR"?"Türkiye":ulke,region:mode==="TR"?"Türkiye":region,sector:sektor,productType:"Yeni Makine",product:"",value:0,stage:"Lead",whatsapp:f.whatsapp||f.phone||"",email:f.email||"",phone:f.phone||"",notes:f.notes||""});setAdded(a=>({...a,[i]:true}));}} disabled={added[i]} style={b(added[i]?C.green+"33":C.amber,added[i]?C.green:C.navy,{border:added[i]?`1px solid ${C.green}`:"none"})}>{added[i]?"✓ Eklendi":"+ Ekle"}</button>
+                <button onClick={()=>{onAdd({company:f.company,contact:f.contact||"",country:mode==="TR"?"Türkiye":ulke,region:mode==="TR"?"Türkiye":region,sector:sektor,productType:"Yeni Makine",product:"",value:0,stage:"Lead",whatsapp:f.whatsapp||f.phone||"",email:f.email||"",phone:f.phone||"",notes:f.notes||""});setAdded(a=>({...a,[i]:true}));}} disabled={added[i]} style={bs(added[i]?C.green+"33":C.amber,added[i]?C.green:C.navy,{border:added[i]?`1px solid ${C.green}`:"none"})}>{added[i]?"✓ Eklendi":"+ Ekle"}</button>
               </div>
             </div>
           ))}
@@ -384,52 +450,68 @@ function FirmaBul({onAdd}) {
   );
 }
 
-function CRMModul({leads,setLeads,loadLeads}) {
-  const [sub,setSub]=useState("pipeline");
-  const [search,setSearch]=useState("");
-  const [fR,setFR]=useState("Tümü");
-  const [fS,setFS]=useState("Tümü");
-  const [detail,setDetail]=useState(null);
-  const [showForm,setShowForm]=useState(false);
-  const [editId,setEditId]=useState(null);
-  const [form,setForm]=useState({});
+// ─── CRM ──────────────────────────────────────────────────────────────────────
+function CRMModul({ leads, loadLeads }) {
+  const [sub, setSub] = useState("pipeline");
+  const [search, setSearch] = useState("");
+  const [fR, setFR] = useState("Tümü");
+  const [fS, setFS] = useState("Tümü");
+  const [detail, setDetail] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editLead, setEditLead] = useState(null);
 
-  const filtered=useMemo(()=>leads.filter(l=>{
+  const filtered = useMemo(()=>leads.filter(l=>{
     if(fR!=="Tümü"&&l.region!==fR)return false;
     if(fS!=="Tümü"&&l.stage!==fS)return false;
     if(search&&!`${l.company} ${l.contact} ${l.country}`.toLowerCase().includes(search.toLowerCase()))return false;
     return true;
   }),[leads,fR,fS,search]);
 
-  async function save(){if(!form.company)return;if(editId){await dbSaveLead({...form,id:editId});}else{const newLead={...form,id:Date.now(),created:today(),lastContact:today()};await dbSaveLead(newLead);}await loadLeads();setShowForm(false);}
-  async function del(id){if(window.confirm("Silinsin mi?")){await dbDeleteLead(id);await loadLeads();setDetail(null);}}
-  async function move(id,stage){await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`,{method:"PATCH",headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json"},body:JSON.stringify({stage})});await loadLeads();}
+  async function handleSave(data) {
+    if (editLead) { await dbUpdateLead(editLead.id, data); }
+    else { await dbInsertLead(data); }
+    await loadLeads();
+    setShowForm(false);
+    setEditLead(null);
+  }
 
-  const F=({label,name,type="text",opts,span})=>(
-    <div style={{display:"flex",flexDirection:"column",gap:4,...(span?{gridColumn:"1/-1"}:{})}}>
-      <label style={{fontSize:11,color:C.smoke,fontWeight:600}}>{label}</label>
-      {opts?<select style={sel} value={form[name]||""} onChange={e=>setForm(f=>({...f,[name]:e.target.value}))}>{opts.map(o=><option key={o}>{o}</option>)}</select>
-      :type==="textarea"?<textarea style={{...inp,minHeight:70,resize:"vertical"}} value={form[name]||""} onChange={e=>setForm(f=>({...f,[name]:e.target.value}))}/>
-      :<input style={inp} type={type} value={form[name]||""} onChange={e=>setForm(f=>({...f,[name]:type==="number"?Number(e.target.value):e.target.value}))}/>}
-    </div>
-  );
+  async function handleDelete(id) {
+    if (window.confirm("Bu lead silinsin mi?")) {
+      await dbDeleteLead(id);
+      await loadLeads();
+      setDetail(null);
+    }
+  }
+
+  async function handleStageChange(id, stage) {
+    await dbUpdateStage(id, stage);
+    await loadLeads();
+  }
 
   return (
     <div>
+      {showForm && (
+        <LeadFormModal
+          editLead={editLead}
+          onClose={()=>{setShowForm(false);setEditLead(null);}}
+          onSave={handleSave}
+        />
+      )}
+
       <div style={{display:"flex",gap:8,marginBottom:18,borderBottom:`1px solid ${C.border}`,paddingBottom:12}}>
         {[["pipeline","Pipeline"],["list","Liste"],["firma","🔍 Firma Bul"]].map(([k,v])=>(
-          <button key={k} onClick={()=>setSub(k)} style={b(sub===k?C.amberDim:"transparent",sub===k?C.amber:C.smoke,{border:`1px solid ${sub===k?C.amber+"55":C.border}`})}>{v}</button>
+          <button key={k} onClick={()=>setSub(k)} style={bs(sub===k?C.amberDim:"transparent",sub===k?C.amber:C.smoke,{border:`1px solid ${sub===k?C.amber+"55":C.border}`})}>{v}</button>
         ))}
-        <button onClick={()=>{setForm({stage:"Lead",region:"Türkiye",sector:"Hafriyat",productType:"Yeni Makine",value:0});setEditId(null);setShowForm(true);}} style={b(C.amber,C.navy,{marginLeft:"auto"})}>+ Yeni Lead</button>
+        <button onClick={()=>{setEditLead(null);setShowForm(true);}} style={bs(C.amber,C.navy,{marginLeft:"auto"})}>+ Yeni Lead</button>
       </div>
 
-      {sub==="firma"&&<FirmaBul onAdd={l=>{setLeads(ls=>[...ls,{...l,id:Date.now(),created:today(),lastContact:today()}]);}}/>}
+      {sub==="firma"&&<FirmaBul onAdd={async(l)=>{await dbInsertLead(l);await loadLeads();}}/>}
 
       {(sub==="pipeline"||sub==="list")&&(
         <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-          <input style={{...inp,width:200}} placeholder="🔍 Ara..." value={search} onChange={e=>setSearch(e.target.value)}/>
-          <select style={{...sel,width:"auto"}} value={fR} onChange={e=>setFR(e.target.value)}><option>Tümü</option>{REGIONS.map(r=><option key={r}>{r}</option>)}</select>
-          <select style={{...sel,width:"auto"}} value={fS} onChange={e=>setFS(e.target.value)}><option>Tümü</option>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
+          <input style={{...inpStyle,width:200}} placeholder="🔍 Ara..." value={search} onChange={e=>setSearch(e.target.value)}/>
+          <select style={{...inpStyle,width:"auto",cursor:"pointer"}} value={fR} onChange={e=>setFR(e.target.value)}><option>Tümü</option>{REGIONS.map(r=><option key={r}>{r}</option>)}</select>
+          <select style={{...inpStyle,width:"auto",cursor:"pointer"}} value={fS} onChange={e=>setFS(e.target.value)}><option>Tümü</option>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
           <span style={{fontSize:12,color:C.smoke}}>{filtered.length} sonuç</span>
         </div>
       )}
@@ -483,10 +565,10 @@ function CRMModul({leads,setLeads,loadLeads}) {
 
       {detail&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div style={{...card({padding:28}),width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}}>
+          <div style={{...cardSt({padding:28}),width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
               <div><div style={{fontSize:20,fontWeight:800,color:C.amber}}>{detail.company}</div><div style={{fontSize:13,color:C.smoke,marginTop:2}}>{detail.country} · {detail.region}</div></div>
-              <span style={pill(SC[detail.stage])}>{detail.stage}</span>
+              <button onClick={()=>setDetail(null)} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:22}}>✕</button>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
               <div><div style={{fontSize:10,color:C.smoke,marginBottom:2}}>KİŞİ</div><div>{detail.contact}</div></div>
@@ -505,35 +587,13 @@ function CRMModul({leads,setLeads,loadLeads}) {
             <div style={{marginBottom:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
               <div style={{fontSize:10,color:C.smoke,marginBottom:8}}>AŞAMA DEĞİŞTİR</div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                {STAGES.map(s=><button key={s} onClick={()=>{move(detail.id,s);setDetail(d=>({...d,stage:s}));}} style={{...pill(SC[s]),cursor:"pointer",border:detail.stage===s?`2px solid ${SC[s]}`:`1px solid ${SC[s]}33`,background:detail.stage===s?SC[s]+"33":SC[s]+"11"}}>{s}</button>)}
+                {STAGES.map(s=><button key={s} onClick={async()=>{await handleStageChange(detail.id,s);setDetail(d=>({...d,stage:s}));}} style={{...pill(SC[s]),cursor:"pointer",border:detail.stage===s?`2px solid ${SC[s]}`:`1px solid ${SC[s]}33`,background:detail.stage===s?SC[s]+"33":SC[s]+"11"}}>{s}</button>)}
               </div>
             </div>
             <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <button onClick={()=>del(detail.id)} style={ob(C.rust)}>Sil</button>
+              <button onClick={()=>handleDelete(detail.id)} style={ob(C.rust)}>Sil</button>
               <button onClick={()=>setDetail(null)} style={ob(C.smoke)}>Kapat</button>
-              <button onClick={()=>{setForm({...detail});setEditId(detail.id);setShowForm(true);setDetail(null);}} style={b(C.amber,C.navy)}>✏ Düzenle</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showForm&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div style={{...card({padding:28}),width:"100%",maxWidth:540,maxHeight:"90vh",overflowY:"auto"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-            <div style={{fontSize:17,fontWeight:800,color:C.amber}}>{editId?"Lead Düzenle":"Yeni Lead"}</div>
-            <button onClick={()=>setShowForm(false)} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:20}}>✕</button>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <F label="FİRMA ADI *" name="company" span/><F label="İLETİŞİM KİŞİSİ" name="contact"/><F label="ÜLKE" name="country"/>
-              <F label="BÖLGE" name="region" opts={REGIONS}/><F label="SEKTÖR" name="sector" opts={SECTORS}/><F label="ÜRÜN TİPİ" name="productType" opts={PRODUCT_TYPES}/>
-              <F label="ÜRÜN / TALEP" name="product" span/><F label="DEĞER ($)" name="value" type="number"/><F label="AŞAMA" name="stage" opts={STAGES}/>
-              <F label="WHATSAPP" name="whatsapp" span/><F label="E-POSTA" name="email"/><F label="TELEFON" name="phone"/>
-              <F label="NOTLAR" name="notes" type="textarea" span/>
-            </div>
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:20}}>
-              <button onClick={()=>setShowForm(false)} style={ob(C.smoke)}>İptal</button>
-              <button onClick={save} style={b(C.amber,C.navy)}>💾 Kaydet</button>
+              <button onClick={()=>{setEditLead(detail);setShowForm(true);setDetail(null);}} style={bs(C.amber,C.navy)}>✏ Düzenle</button>
             </div>
           </div>
         </div>
@@ -542,11 +602,11 @@ function CRMModul({leads,setLeads,loadLeads}) {
   );
 }
 
-function AICopilot({leads}) {
-  const [msgs,setMsgs]=useState([{role:"assistant",text:"Günaydın Duran. 👋\n\nBen GNDOS AI Copilot'un. Global iş makinesi ve ağır ekipman sektörü uzmanın.\n\n🎯 Öncelikli leadleri söylerim\n🌍 Pazar analizi yaparım\n📄 Teklif metni yazarım\n\nNe öğrenmek istiyorsun?"}]);
+// ─── AI COPILOT ───────────────────────────────────────────────────────────────
+function AICopilot({ leads }) {
+  const [msgs,setMsgs]=useState([{role:"assistant",text:"Günaydın Duran. 👋\n\nBen GNDOS AI Copilot'un. Global iş makinesi uzmanın.\n\n🎯 Öncelikli leadleri söylerim\n🌍 Pazar analizi yaparım\n📄 Teklif metni yazarım\n\nNe öğrenmek istiyorsun?"}]);
   const [input,setInput]=useState("");
   const [loading,setLoading]=useState(false);
-  const suggestions=["Bugün hangi leadlere odaklanayım?","Suudi Arabistan pazarı için strateji öner","Pipeline değerimi artırmak için ne yapmalıyım?"];
 
   async function send(text) {
     const msg=text||input.trim();
@@ -556,12 +616,10 @@ function AICopilot({leads}) {
     setLoading(true);
     const ctx=`Global iş makinesi satış uzmanısın. Kullanıcı: Duran. Leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa cevap.`;
     try {
-      const text = await callClaude({max_tokens:600,system:ctx,messages:[{role:"user",content:msg}]});
-      setMsgs(m=>[...m,{role:"assistant",text}]);
-    } catch(e){
-      console.error("AI Copilot error:", e);
-      setMsgs(m=>[...m,{role:"assistant",text:"❌ " + (e.message||"Bağlantı hatası")}]);
-    }
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,system:ctx,messages:[{role:"user",content:msg}]})});
+      const data=await res.json();
+      setMsgs(m=>[...m,{role:"assistant",text:data.content?.map(i=>i.text||"").join("")||"API key gerekli."}]);
+    } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Bağlantı hatası — API key gerekli."}]);}
     setLoading(false);
   }
 
@@ -576,11 +634,11 @@ function AICopilot({leads}) {
         {loading&&<div style={{display:"flex",justifyContent:"flex-start"}}><div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:"16px 16px 16px 4px",padding:"12px 16px",color:C.smoke}}>⏳ Düşünüyor...</div></div>}
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-        {suggestions.map((s,i)=><button key={i} onClick={()=>send(s)} style={{...ob(C.smoke),fontSize:11,padding:"4px 10px"}}>{s}</button>)}
+        {["Bugün hangi leadlere odaklanayım?","Suudi Arabistan için strateji öner","Pipeline değerimi nasıl artırırım?"].map((s,i)=><button key={i} onClick={()=>send(s)} style={{...ob(C.smoke),fontSize:11,padding:"4px 10px"}}>{s}</button>)}
       </div>
       <div style={{display:"flex",gap:10}}>
-        <input style={{...inp,flex:1}} placeholder="Sorunuzu yazın..." value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()}/>
-        <button onClick={()=>send()} disabled={loading} style={b(C.amber,C.navy,{padding:"8px 20px"})}>Gönder</button>
+        <input style={{...inpStyle,flex:1}} placeholder="Sorunuzu yazın..." value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()}/>
+        <button onClick={()=>send()} disabled={loading} style={bs(C.amber,C.navy,{padding:"8px 20px"})}>Gönder</button>
       </div>
     </div>
   );
@@ -588,7 +646,7 @@ function AICopilot({leads}) {
 
 function SimpleModule({title, content}) {
   return (
-    <div style={{...card({padding:40,textAlign:"center"})}}>
+    <div style={{...cardSt({padding:40,textAlign:"center"})}}>
       <div style={{fontSize:48,marginBottom:16}}>{title.split(" ")[0]}</div>
       <div style={{fontSize:18,fontWeight:700,color:C.amber,marginBottom:8}}>{title}</div>
       <div style={{color:C.smoke}}>{content}</div>
@@ -596,51 +654,12 @@ function SimpleModule({title, content}) {
   );
 }
 
-
-// ── LOGIN SCREEN ──────────────────────────────────────────────────────────────
-const SIFRE = "Gndos2026";
-
-function LoginScreen({ onLogin }) {
-  const [sifre, setSifre] = useState("");
-  const [hata, setHata] = useState(false);
-
-  function giris() {
-    if (sifre === SIFRE) {
-      sessionStorage.setItem("gndos_auth", "true");
-      onLogin();
-    } else {
-      setHata(true);
-      setTimeout(() => setHata(false), 2000);
-    }
-  }
-
-  return (
-    <div style={{ fontFamily:"'Inter','Helvetica Neue',sans-serif", background:"#060D14", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div style={{ background:"#0E1E2E", border:"1px solid #162030", borderRadius:12, padding:40, width:320, textAlign:"center" }}>
-        <div style={{ fontSize:28, fontWeight:900, letterSpacing:4, color:"#F0A500", marginBottom:4 }}>GNDOS</div>
-        <div style={{ fontSize:11, color:"#6B8299", letterSpacing:2, marginBottom:32 }}>GLOBAL OPS PLATFORM</div>
-        <input
-          type="password"
-          placeholder="Şifre girin..."
-          value={sifre}
-          onChange={e => setSifre(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && giris()}
-          style={{ background:"#060D14", color:"#E8EDF3", border:`1px solid ${hata?"#E63946":"#162030"}`, borderRadius:6, padding:"10px 14px", fontSize:14, width:"100%", boxSizing:"border-box", marginBottom:12, outline:"none", textAlign:"center" }}
-        />
-        {hata && <div style={{ color:"#E63946", fontSize:12, marginBottom:8 }}>Yanlış şifre!</div>}
-        <button onClick={giris} style={{ background:"#F0A500", color:"#060D14", border:"none", borderRadius:6, padding:"10px 0", width:"100%", fontSize:14, fontWeight:700, cursor:"pointer" }}>
-          Giriş Yap
-        </button>
-      </div>
-    </div>
-  );
-}
-
+// ─── ANA UYGULAMA ─────────────────────────────────────────────────────────────
 export default function GNDOS() {
   const [loggedIn, setLoggedIn] = useState(()=>{ try{ return localStorage.getItem("gndos_auth")==="1"; }catch(e){ return false; } });
-  const [active,setActive]=useState("home");
-  const [leads,setLeads]=useState([]);
-  const [loading,setLoading]=useState(false);
+  const [active, setActive] = useState("home");
+  const [leads, setLeads] = useState([]);
+  const [loading, setLoading] = useState(false);
 
   async function loadLeads() {
     setLoading(true);
@@ -651,11 +670,13 @@ export default function GNDOS() {
 
   useEffect(()=>{ if(loggedIn) loadLeads(); },[loggedIn]);
 
-  if (!loggedIn) return <LoginScreen onLogin={()=>{ try{ localStorage.setItem("gndos_auth","1"); }catch(e){} setLoggedIn(true); }}/>;
-  if (loading) return <div style={{background:"#060D14",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#F0A500",fontSize:18,fontWeight:700}}>⚙️ GNDOS yükleniyor...</div>;
-  const cur=MODULES.find(m=>m.key===active);
-  
+  function handleLogin() {
+    try{ localStorage.setItem("gndos_auth","1"); }catch(e){}
+    setLoggedIn(true);
+  }
 
+  if (!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
+  if (loading) return <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:C.amber,fontSize:18,fontWeight:700,fontFamily:"'Inter',sans-serif"}}>⚙️ GNDOS yükleniyor...</div>;
 
   return (
     <div style={{fontFamily:"'Inter','Helvetica Neue',sans-serif",background:C.bg,minHeight:"100vh",color:C.ghost,display:"flex",flexDirection:"column"}}>
@@ -674,19 +695,20 @@ export default function GNDOS() {
         <div style={{display:"flex",alignItems:"center",gap:6,paddingLeft:16,borderLeft:`1px solid ${C.border}`,flexShrink:0}}>
           <div style={{width:7,height:7,borderRadius:"50%",background:C.green}}/>
           <span style={{fontSize:11,color:C.smoke}}>Online</span>
+          <button onClick={()=>{try{localStorage.removeItem("gndos_auth");}catch(e){}setLoggedIn(false);}} style={{...ob(C.smoke),fontSize:10,padding:"3px 8px",marginLeft:8}}>Çıkış</button>
         </div>
       </div>
 
       <div style={{flex:1,padding:"24px 28px",overflowY:"auto",maxWidth:1400,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
-        {active==="home"&&<CommandCenter leads={leads} setActive={setActive}/>}
-        {active==="crm"&&<CRMModul leads={leads} setLeads={setLeads} loadLeads={loadLeads}/>}
+        {active==="home"&&<CommandCenter leads={leads} setActive={setActive} loadLeads={loadLeads}/>}
+        {active==="crm"&&<CRMModul leads={leads} loadLeads={loadLeads}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
-        {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu — yakında aktif olacak"/>}
-        {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi — yakında aktif olacak"/>}
-        {active==="finans"&&<SimpleModule title="💰 Finance" content="Finans takibi — yakında aktif olacak"/>}
-        {active==="analiz"&&<SimpleModule title="📊 Intelligence" content="Analiz paneli — yakında aktif olacak"/>}
-        {active==="teklif"&&<SimpleModule title="📄 Proposal Center" content="Teklif merkezi — yakında aktif olacak"/>}
-        {active==="dokuman"&&<SimpleModule title="📁 Knowledge Base" content="Bilgi bankası — yakında aktif olacak"/>}
+        {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
+        {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
+        {active==="finans"&&<SimpleModule title="💰 Finance" content="Finans takibi yakında aktif olacak"/>}
+        {active==="analiz"&&<SimpleModule title="📊 Intelligence" content="Analiz paneli yakında aktif olacak"/>}
+        {active==="teklif"&&<SimpleModule title="📄 Proposal Center" content="Teklif merkezi yakında aktif olacak"/>}
+        {active==="dokuman"&&<SimpleModule title="📁 Knowledge Base" content="Bilgi bankası yakında aktif olacak"/>}
       </div>
     </div>
   );
