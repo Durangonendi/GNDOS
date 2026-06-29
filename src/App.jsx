@@ -675,6 +675,6 @@ export default function GNDOS() {
         {active==="teklif"&&<SimpleModule title="📄 Proposal Center" content="Teklif merkezi — yakında aktif olacak"/>}
         {active==="dokuman"&&<SimpleModule title="📁 Knowledge Base" content="Bilgi bankası — yakında aktif olacak"/>}
       </div>
-    </div>
+    </div> 
   );
 }
