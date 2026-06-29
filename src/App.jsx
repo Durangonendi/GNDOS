@@ -1,38 +1,5 @@
 import { useState, useMemo } from "react";
 
-// ── ŞİFRE KORUMA ─────────────────────────────────────────────────────────────
-const CORRECT_PASSWORD = "Gndos2026";
-
-function LoginScreen({ onLogin }) {
-  const [pass, setPass] = useState("");
-  const [error, setError] = useState(false);
-  function tryLogin() {
-    if (pass === CORRECT_PASSWORD) { onLogin(); }
-    else { setError(true); setTimeout(() => setError(false), 2000); }
-  }
-  return (
-    <div style={{fontFamily:"'Inter',sans-serif",background:"#060D14",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{background:"#101F30",border:"1px solid #162030",borderRadius:12,padding:40,width:320,textAlign:"center"}}>
-        <div style={{fontSize:28,fontWeight:900,letterSpacing:4,color:"#F0A500",marginBottom:4}}>GNDOS</div>
-        <div style={{fontSize:11,color:"#6B8299",letterSpacing:2,marginBottom:32}}>GLOBAL OPS PLATFORM</div>
-        <input
-          type="password"
-          placeholder="Şifre"
-          value={pass}
-          onChange={e=>setPass(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&tryLogin()}
-          style={{width:"100%",boxSizing:"border-box",background:"#0A1628",color:"#E8EDF3",border:`1px solid ${error?"#E63946":"#162030"}`,borderRadius:6,padding:"10px 14px",fontSize:14,marginBottom:12,outline:"none",textAlign:"center",letterSpacing:4}}
-        />
-        {error && <div style={{color:"#E63946",fontSize:12,marginBottom:8}}>Yanlış şifre!</div>}
-        <button onClick={tryLogin} style={{width:"100%",background:"#F0A500",color:"#060D14",border:"none",borderRadius:6,padding:"11px",fontSize:14,fontWeight:800,cursor:"pointer"}}>
-          Giriş Yap
-        </button>
-        <div style={{fontSize:11,color:"#3A5068",marginTop:16}}>Sadece yetkili erişim</div>
-      </div>
-    </div>
-  );
-}
-
 
 
 // ── API HELPER ────────────────────────────────────────────────────────────────
@@ -675,6 +642,6 @@ export default function GNDOS() {
         {active==="teklif"&&<SimpleModule title="📄 Proposal Center" content="Teklif merkezi — yakında aktif olacak"/>}
         {active==="dokuman"&&<SimpleModule title="📁 Knowledge Base" content="Bilgi bankası — yakında aktif olacak"/>}
       </div>
-    </div> 
+    </div>
   );
 }
