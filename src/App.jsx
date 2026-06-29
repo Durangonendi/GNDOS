@@ -636,15 +636,13 @@ function LoginScreen({ onLogin }) {
 }
 
 export default function GNDOS() {
-  const [loggedIn, setLoggedIn] = useState(() => sessionStorage.getItem("gndos_auth") === "true");
-  function handleLogin() { sessionStorage.setItem("gndos_auth", "true"); setLoggedIn(true); }
-  if (!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
-  const [loggedIn, setLoggedIn] = useState(sessionStorage.getItem("gndos_auth") === "true");
+  const [loggedIn, setLoggedIn] = useState(false);
   const [active,setActive]=useState("home");
   const [leads,setLeads]=useState(DEMO_LEADS);
+  if (!loggedIn) return <LoginScreen onLogin={()=>setLoggedIn(true)}/>;
   const cur=MODULES.find(m=>m.key===active);
   
-  if (!loggedIn) return <LoginScreen onLogin={() => setLoggedIn(true)} />;
+
 
   return (
     <div style={{fontFamily:"'Inter','Helvetica Neue',sans-serif",background:C.bg,minHeight:"100vh",color:C.ghost,display:"flex",flexDirection:"column"}}>
