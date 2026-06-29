@@ -1,4 +1,35 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+
+const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL;
+const SUPABASE_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
+
+async function dbGetLeads() {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/leads?select=*&order=id.desc`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+    });
+    const data = await res.json();
+    return Array.isArray(data) ? data.map(l => ({...l, value: Number(l.value)||0})) : [];
+  } catch(e) { return []; }
+}
+
+async function dbSaveLead(lead) {
+  try {
+    const body = { company:lead.company, contact:lead.contact, country:lead.country, region:lead.region, sector:lead.sector, product_type:lead.productType, product:lead.product, value:lead.value||0, stage:lead.stage, whatsapp:lead.whatsapp, email:lead.email, phone:lead.phone, notes:lead.notes };
+    if (lead.id && typeof lead.id === 'number' && lead.id > 1000000000) {
+      await fetch(`${SUPABASE_URL}/rest/v1/leads`, { method:"POST", headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json","Prefer":"return=minimal"}, body:JSON.stringify(body) });
+    } else if (lead.id) {
+      await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${lead.id}`, { method:"PATCH", headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json"}, body:JSON.stringify(body) });
+    }
+  } catch(e) {}
+}
+
+async function dbDeleteLead(id) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, { method:"DELETE", headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`} });
+  } catch(e) {}
+}
+
 
 
 
@@ -353,7 +384,7 @@ function FirmaBul({onAdd}) {
   );
 }
 
-function CRMModul({leads,setLeads}) {
+function CRMModul({leads,setLeads,loadLeads}) {
   const [sub,setSub]=useState("pipeline");
   const [search,setSearch]=useState("");
   const [fR,setFR]=useState("Tümü");
@@ -370,9 +401,9 @@ function CRMModul({leads,setLeads}) {
     return true;
   }),[leads,fR,fS,search]);
 
-  function save(){if(!form.company)return;if(editId){setLeads(ls=>ls.map(l=>l.id===editId?{...l,...form}:l));}else{setLeads(ls=>[...ls,{...form,id:Date.now(),created:today(),lastContact:today()}]);}setShowForm(false);}
-  function del(id){if(window.confirm("Silinsin mi?")){setLeads(ls=>ls.filter(l=>l.id!==id));setDetail(null);}}
-  function move(id,stage){setLeads(ls=>ls.map(l=>l.id===id?{...l,stage}:l));}
+  async function save(){if(!form.company)return;if(editId){await dbSaveLead({...form,id:editId});}else{const newLead={...form,id:Date.now(),created:today(),lastContact:today()};await dbSaveLead(newLead);}await loadLeads();setShowForm(false);}
+  async function del(id){if(window.confirm("Silinsin mi?")){await dbDeleteLead(id);await loadLeads();setDetail(null);}}
+  async function move(id,stage){await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`,{method:"PATCH",headers:{"apikey":SUPABASE_KEY,"Authorization":`Bearer ${SUPABASE_KEY}`,"Content-Type":"application/json"},body:JSON.stringify({stage})});await loadLeads();}
 
   const F=({label,name,type="text",opts,span})=>(
     <div style={{display:"flex",flexDirection:"column",gap:4,...(span?{gridColumn:"1/-1"}:{})}}>
@@ -605,8 +636,20 @@ function LoginScreen({ onLogin }) {
 export default function GNDOS() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [active,setActive]=useState("home");
-  const [leads,setLeads]=useState(DEMO_LEADS);
+  const [leads,setLeads]=useState([]);
+  const [loading,setLoading]=useState(false);
+
+  async function loadLeads() {
+    setLoading(true);
+    const data = await dbGetLeads();
+    setLeads(data);
+    setLoading(false);
+  }
+
+  useEffect(()=>{ if(loggedIn) loadLeads(); },[loggedIn]);
+
   if (!loggedIn) return <LoginScreen onLogin={()=>setLoggedIn(true)}/>;
+  if (loading) return <div style={{background:"#060D14",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#F0A500",fontSize:18,fontWeight:700}}>⚙️ GNDOS yükleniyor...</div>;
   const cur=MODULES.find(m=>m.key===active);
   
 
@@ -633,7 +676,7 @@ export default function GNDOS() {
 
       <div style={{flex:1,padding:"24px 28px",overflowY:"auto",maxWidth:1400,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
         {active==="home"&&<CommandCenter leads={leads} setActive={setActive}/>}
-        {active==="crm"&&<CRMModul leads={leads} setLeads={setLeads}/>}
+        {active==="crm"&&<CRMModul leads={leads} setLeads={setLeads} loadLeads={loadLeads}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu — yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi — yakında aktif olacak"/>}
