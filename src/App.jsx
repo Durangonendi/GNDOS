@@ -482,8 +482,8 @@ function CRMModul({leads,setLeads,loadLeads}) {
       )}
 
       {detail&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setDetail(null)}>
-          <div style={{...card({padding:28}),width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{...card({padding:28}),width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
               <div><div style={{fontSize:20,fontWeight:800,color:C.amber}}>{detail.company}</div><div style={{fontSize:13,color:C.smoke,marginTop:2}}>{detail.country} · {detail.region}</div></div>
               <span style={pill(SC[detail.stage])}>{detail.stage}</span>
@@ -518,9 +518,12 @@ function CRMModul({leads,setLeads,loadLeads}) {
       )}
 
       {showForm&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setShowForm(false)}>
-          <div style={{...card({padding:28}),width:"100%",maxWidth:540,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:17,fontWeight:800,color:C.amber,marginBottom:20}}>{editId?"Lead Düzenle":"Yeni Lead"}</div>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{...card({padding:28}),width:"100%",maxWidth:540,maxHeight:"90vh",overflowY:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+            <div style={{fontSize:17,fontWeight:800,color:C.amber}}>{editId?"Lead Düzenle":"Yeni Lead"}</div>
+            <button onClick={()=>setShowForm(false)} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:20}}>✕</button>
+            </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <F label="FİRMA ADI *" name="company" span/><F label="İLETİŞİM KİŞİSİ" name="contact"/><F label="ÜLKE" name="country"/>
               <F label="BÖLGE" name="region" opts={REGIONS}/><F label="SEKTÖR" name="sector" opts={SECTORS}/><F label="ÜRÜN TİPİ" name="productType" opts={PRODUCT_TYPES}/>
@@ -634,7 +637,7 @@ function LoginScreen({ onLogin }) {
 }
 
 export default function GNDOS() {
-  const [loggedIn, setLoggedIn] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(()=>{ try{ return localStorage.getItem("gndos_auth")==="1"; }catch(e){ return false; } });
   const [active,setActive]=useState("home");
   const [leads,setLeads]=useState([]);
   const [loading,setLoading]=useState(false);
@@ -648,7 +651,7 @@ export default function GNDOS() {
 
   useEffect(()=>{ if(loggedIn) loadLeads(); },[loggedIn]);
 
-  if (!loggedIn) return <LoginScreen onLogin={()=>setLoggedIn(true)}/>;
+  if (!loggedIn) return <LoginScreen onLogin={()=>{ try{ localStorage.setItem("gndos_auth","1"); }catch(e){} setLoggedIn(true); }}/>;
   if (loading) return <div style={{background:"#060D14",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#F0A500",fontSize:18,fontWeight:700}}>⚙️ GNDOS yükleniyor...</div>;
   const cur=MODULES.find(m=>m.key===active);
   
