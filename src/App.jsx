@@ -456,16 +456,26 @@ function CRMModul({ leads, loadLeads }) {
   const [search, setSearch] = useState("");
   const [fR, setFR] = useState("Tümü");
   const [fS, setFS] = useState("Tümü");
+  const [fSec, setFSec] = useState("Tümü");
+  const [fC, setFC] = useState("Tümü");
   const [detail, setDetail] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editLead, setEditLead] = useState(null);
 
+  const countryOptions = useMemo(()=>{
+    const set = new Set();
+    leads.forEach(l=>{ if(l.country && l.country.trim()) set.add(l.country.trim()); });
+    return Array.from(set).sort();
+  },[leads]);
+
   const filtered = useMemo(()=>leads.filter(l=>{
     if(fR!=="Tümü"&&l.region!==fR)return false;
     if(fS!=="Tümü"&&l.stage!==fS)return false;
-    if(search&&!`${l.company} ${l.contact} ${l.country}`.toLowerCase().includes(search.toLowerCase()))return false;
+    if(fSec!=="Tümü"&&l.sector!==fSec)return false;
+    if(fC!=="Tümü"&&l.country!==fC)return false;
+    if(search&&!`${l.company} ${l.contact} ${l.country} ${l.notes||""}`.toLowerCase().includes(search.toLowerCase()))return false;
     return true;
-  }),[leads,fR,fS,search]);
+  }),[leads,fR,fS,fSec,fC,search]);
 
   async function handleSave(data) {
     if (editLead) { await dbUpdateLead(editLead.id, data); }
@@ -509,8 +519,10 @@ function CRMModul({ leads, loadLeads }) {
 
       {(sub==="pipeline"||sub==="list")&&(
         <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-          <input style={{...inpStyle,width:200}} placeholder="🔍 Ara..." value={search} onChange={e=>setSearch(e.target.value)}/>
+          <input style={{...inpStyle,width:220}} placeholder="🔍 Firma, şehir, adres ara..." value={search} onChange={e=>setSearch(e.target.value)}/>
+          <select style={{...inpStyle,width:"auto",cursor:"pointer"}} value={fSec} onChange={e=>setFSec(e.target.value)}><option>Tümü</option>{SECTORS.map(s=><option key={s}>{s}</option>)}</select>
           <select style={{...inpStyle,width:"auto",cursor:"pointer"}} value={fR} onChange={e=>setFR(e.target.value)}><option>Tümü</option>{REGIONS.map(r=><option key={r}>{r}</option>)}</select>
+          <select style={{...inpStyle,width:"auto",cursor:"pointer"}} value={fC} onChange={e=>setFC(e.target.value)}><option>Tümü</option>{countryOptions.map(c=><option key={c}>{c}</option>)}</select>
           <select style={{...inpStyle,width:"auto",cursor:"pointer"}} value={fS} onChange={e=>setFS(e.target.value)}><option>Tümü</option>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
           <span style={{fontSize:12,color:C.smoke}}>{filtered.length} sonuç</span>
         </div>
@@ -531,7 +543,7 @@ function CRMModul({ leads, loadLeads }) {
                     <div key={l.id} onClick={()=>setDetail(l)} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:"10px 12px",cursor:"pointer"}}>
                       <div style={{fontWeight:700,fontSize:13}}>{l.company}</div>
                       <div style={{fontSize:11,color:C.smoke}}>{l.contact}</div>
-                      <div style={{fontSize:10,color:C.smoke,marginTop:2}}>🌍 {l.country}</div>
+                      <div style={{fontSize:10,color:C.smoke,marginTop:2}}>🌍 {l.country} {l.sector?`· ${l.sector}`:""}</div>
                       <div style={{fontSize:12,color:C.amber,fontWeight:700,marginTop:5}}>{fmt(l.value)}</div>
                     </div>
                   ))}
@@ -545,10 +557,11 @@ function CRMModul({ leads, loadLeads }) {
       {sub==="list"&&(
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-            <thead><tr>{["FİRMA","KİŞİ","ÜLKE","DEĞER","AŞAMA","İLETİŞİM"].map(h=><th key={h} style={{background:C.panel,color:C.smoke,padding:"9px 12px",textAlign:"left",fontSize:11,borderBottom:`1px solid ${C.border}`,fontWeight:600}}>{h}</th>)}</tr></thead>
+            <thead><tr>{["FİRMA","SEKTÖR","KİŞİ","ÜLKE","DEĞER","AŞAMA","İLETİŞİM"].map(h=><th key={h} style={{background:C.panel,color:C.smoke,padding:"9px 12px",textAlign:"left",fontSize:11,borderBottom:`1px solid ${C.border}`,fontWeight:600}}>{h}</th>)}</tr></thead>
             <tbody>{filtered.map(l=>(
               <tr key={l.id} onClick={()=>setDetail(l)} style={{cursor:"pointer"}}>
                 <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:700}}>{l.company}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}}>{l.sector}</td>
                 <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`}}>{l.contact}</td>
                 <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}}>{l.country}</td>
                 <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.amber,fontWeight:700}}>{fmt(l.value)}</td>
