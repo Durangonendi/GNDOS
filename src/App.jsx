@@ -725,7 +725,7 @@ export default function GNDOS() {
       </div>
 
       <div style={{position:"fixed",bottom:8,right:12,fontSize:11,color:"rgba(255,255,255,0.25)",pointerEvents:"none",zIndex:40}}>
-        Duran Gönendi
+        Shadow Master
       </div>
     </div>
   );
