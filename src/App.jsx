@@ -723,6 +723,10 @@ export default function GNDOS() {
         {active==="teklif"&&<SimpleModule title="📄 Proposal Center" content="Teklif merkezi yakında aktif olacak"/>}
         {active==="dokuman"&&<SimpleModule title="📁 Knowledge Base" content="Bilgi bankası yakında aktif olacak"/>}
       </div>
+
+      <div style={{position:"fixed",bottom:8,right:12,fontSize:11,color:"rgba(255,255,255,0.25)",pointerEvents:"none",zIndex:40}}>
+        Duran Gönendi
+      </div>
     </div>
   );
 }
