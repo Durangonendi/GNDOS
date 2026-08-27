@@ -236,6 +236,7 @@ const MODULES = [
   {key:"crm",icon:"🌍",label:"Global CRM"},
   {key:"companies",icon:"🏢",label:"Companies"},
   {key:"campaigns",icon:"📣",label:"Campaigns"},
+  {key:"queue",icon:"📤",label:"Send Queue"},
   {key:"import",icon:"📥",label:"Import Center"},
   {key:"makine",icon:"🏗️",label:"Equipment Center"},
   {key:"stok",icon:"📦",label:"Inventory"},
@@ -783,6 +784,7 @@ function CompaniesModul() {
 function CampaignCenter() {
   const [name, setName] = useState("");
   const [channel, setChannel] = useState("whatsapp");
+  const [messageTemplate, setMessageTemplate] = useState("");
   const [fCountry, setFCountry] = useState("");
   const [fSector, setFSector] = useState("");
   const [requireMethod, setRequireMethod] = useState(true);
@@ -830,7 +832,7 @@ function CampaignCenter() {
       method: "POST",
       headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
       body: JSON.stringify({
-        name, channel, status: "draft",
+        name, channel, status: "draft", message_template: messageTemplate || null,
         filter_json: { country: fCountry || null, sector: fSector || null, requireMethod },
       }),
     });
@@ -848,14 +850,32 @@ function CampaignCenter() {
     for (const m of methods) {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/campaign_targets`, {
         method: "POST",
-        headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal,resolution=ignore-duplicates" },
+        headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation,resolution=ignore-duplicates" },
         body: JSON.stringify({ campaign_id: campaignId, contact_method_id: m.id, company_id: m.company_id }),
       });
-      if (r.ok) added++;
+      if (r.ok) {
+        const rows = await r.json();
+        const target = rows?.[0];
+        if (target) {
+          await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages`, {
+            method: "POST",
+            headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal,resolution=ignore-duplicates" },
+            body: JSON.stringify({
+              campaign_target_id: target.id,
+              contact_method_id: m.id,
+              channel,
+              template: messageTemplate || null,
+              idempotency_key: `ct_${target.id}_initial`,
+              status: "queued",
+            }),
+          });
+        }
+        added++;
+      }
     }
 
     setResult({ campaignId, added });
-    setName(""); setMatchCount(null);
+    setName(""); setMatchCount(null); setMessageTemplate("");
     loadCampaigns();
     setCreating(false);
   }
@@ -875,6 +895,11 @@ function CampaignCenter() {
           <div><label style={{fontSize:11,color:C.smoke}}>ÜLKE (opsiyonel)</label><input style={inpStyle} value={fCountry} onChange={e=>{setFCountry(e.target.value); setMatchCount(null);}} placeholder="Örn: Türkiye"/></div>
           <div><label style={{fontSize:11,color:C.smoke}}>SEKTÖR (opsiyonel)</label><input style={inpStyle} value={fSector} onChange={e=>{setFSector(e.target.value); setMatchCount(null);}} placeholder="Örn: Hafriyat"/></div>
         </div>
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:11,color:C.smoke}}>MESAJ ŞABLONU</label>
+          <textarea style={{...inpStyle,minHeight:70,resize:"vertical",fontFamily:"inherit"}} value={messageTemplate} onChange={e=>setMessageTemplate(e.target.value)} placeholder="Örn: Merhaba, GND İş Makineleri olarak..."/>
+          <div style={{fontSize:10,color:C.muted,marginTop:4}}>Gönderim otomatik değil — "Gönderim Kuyruğu" ekranından tek tek WhatsApp/mail açıp elle gönderirsin.</div>
+        </div>
         <div style={{display:"flex",gap:10,marginBottom:14}}>
           <button onClick={previewMatch} disabled={matching} style={ob(C.blue)}>{matching?"Hesaplanıyor...":"🔍 Hedef Kitleyi Say"}</button>
           {matchCount !== null && <span style={{fontSize:13,color:C.ghost,alignSelf:"center"}}>{matchCount} kişi eşleşiyor</span>}
@@ -893,6 +918,103 @@ function CampaignCenter() {
           <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
             <div><b>{c.name}</b> <span style={{color:C.smoke,fontSize:12}}>· {c.channel}</span></div>
             <span style={pill(c.status==="active"?C.green:C.smoke)}>{c.status}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Faz 4/6 — Meta WhatsApp Business API ve gerçek e-posta sağlayıcısı henüz
+// bağlı değil (Duran'ın kendi hesap doğrulaması gerekiyor). Bu yüzden gönderim
+// şimdilik yarı-otomatik: wa.me / mailto linki operatörün kendi WhatsApp/mail
+// istemcisini açar, operatör gönderir ve burada "Gönderildi" olarak işaretler.
+function SendQueue({ user }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [channelFilter, setChannelFilter] = useState("whatsapp");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const token = await authToken();
+    if (!token) { setLoading(false); return; }
+    const url = `${SUPABASE_URL}/rest/v1/outbound_messages?select=id,channel,template,status,sequence_step,contact_methods(value_original,value_normalized,type),campaign_targets(campaign_id,companies(name_original))&status=eq.queued&channel=eq.${channelFilter}&order=id.asc&limit=50`;
+    const res = await fetch(url, { headers: authHeaders(token) });
+    setRows(res.ok ? await res.json() : []);
+    setLoading(false);
+  }, [channelFilter]);
+  useEffect(() => { load(); }, [load]);
+
+  function renderMessage(row) {
+    const companyName = row.campaign_targets?.companies?.name_original || "";
+    return (row.template || "").replaceAll("{firma}", companyName);
+  }
+
+  function openLink(row) {
+    const method = row.contact_methods;
+    if (!method) return;
+    const msg = encodeURIComponent(renderMessage(row));
+    if (row.channel === "whatsapp") {
+      const digits = (method.value_normalized || "").replace(/\D/g, "");
+      window.open(`https://wa.me/${digits}?text=${msg}`, "_blank");
+    } else {
+      window.open(`mailto:${method.value_original}?body=${msg}`, "_blank");
+    }
+  }
+
+  async function markSent(row) {
+    const token = await authToken();
+    if (!token) return;
+    await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?id=eq.${row.id}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
+    });
+    await writeAudit(token, user, "send", "outbound_messages", row.id, { status: "queued" }, { status: "sent" });
+    setRows(prev => prev.filter(r => r.id !== row.id));
+  }
+
+  async function markFailed(row) {
+    const token = await authToken();
+    if (!token) return;
+    await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?id=eq.${row.id}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ status: "failed", last_error: "Operatör manuel olarak atladı/başarısız işaretledi." }),
+    });
+    setRows(prev => prev.filter(r => r.id !== row.id));
+  }
+
+  return (
+    <div>
+      <div style={cardSt({ padding: 20, marginBottom: 16 })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 10 }}>📤 Gönderim Kuyruğu</div>
+        <div style={{ fontSize: 12, color: C.smoke, marginBottom: 14 }}>
+          Meta WhatsApp Business API ve e-posta sağlayıcısı henüz bağlı değil, bu yüzden gönderim elle onaylanıyor:
+          linke tıkla → WhatsApp/mail açılır, mesajı sen gönder → "Gönderildi" işaretle.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setChannelFilter("whatsapp")} style={channelFilter === "whatsapp" ? bs(C.amber, C.navy) : ob(C.smoke)}>WhatsApp</button>
+          <button onClick={() => setChannelFilter("email")} style={channelFilter === "email" ? bs(C.amber, C.navy) : ob(C.smoke)}>E-posta</button>
+          <button onClick={load} style={ob(C.blue)}>🔄 Yenile</button>
+        </div>
+      </div>
+
+      <div style={cardSt({ padding: 20 })}>
+        {loading && <div style={{ color: C.smoke }}>⏳ Yükleniyor...</div>}
+        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Kuyrukta bekleyen mesaj yok.</div>}
+        {rows.map(row => (
+          <div key={row.id} style={{ padding: "12px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <b style={{ fontSize: 13 }}>{row.campaign_targets?.companies?.name_original || "—"}</b>
+              <span style={{ fontSize: 12, color: C.smoke }}>{row.contact_methods?.value_original}</span>
+            </div>
+            <div style={{ fontSize: 12, color: C.ghost, whiteSpace: "pre-wrap", marginBottom: 10 }}>{renderMessage(row) || "(şablon boş)"}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => openLink(row)} style={bs(C.green, C.navy)}>{row.channel === "whatsapp" ? "💬 WhatsApp'ta Aç" : "✉ Mail'de Aç"}</button>
+              <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi</button>
+              <button onClick={() => markFailed(row)} style={ob(C.rust)}>✕ Atla</button>
+            </div>
           </div>
         ))}
       </div>
@@ -1377,6 +1499,7 @@ export default function GNDOS() {
         {active==="import"&&<ImportCenter user={user}/>}
         {active==="companies"&&<CompaniesModul/>}
         {active==="campaigns"&&<CampaignCenter/>}
+        {active==="queue"&&<SendQueue user={user}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
