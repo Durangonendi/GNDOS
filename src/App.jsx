@@ -2,12 +2,93 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL;
 const SUPABASE_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
-const PASSWORD = "Gndos2026";
+
+// ─── AUTH (Supabase Auth — paylaşılan şifrenin yerini alıyor) ─────────────────
+const SESSION_KEY = "gndos_session";
+
+function getSession() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); }
+  catch(e) { return null; }
+}
+function setSession(s) {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch(e) {}
+}
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
+}
+
+async function authLogin(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error_description || data?.msg || "Giriş başarısız");
+  const session = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: Date.now() + (data.expires_in || 3600) * 1000,
+    user: { id: data.user?.id, email: data.user?.email }
+  };
+  setSession(session);
+  return session;
+}
+
+async function authRefresh(refresh_token) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error("Oturum yenilenemedi");
+  const session = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: Date.now() + (data.expires_in || 3600) * 1000,
+    user: { id: data.user?.id, email: data.user?.email }
+  };
+  setSession(session);
+  return session;
+}
+
+// Her istekten önce çağrılır: token süresi dolmuşsa sessizce yeniler.
+async function authToken() {
+  let s = getSession();
+  if (!s) return null;
+  if (Date.now() > s.expires_at - 30000) {
+    try { s = await authRefresh(s.refresh_token); }
+    catch(e) { clearSession(); return null; }
+  }
+  return s.access_token;
+}
+
+function authHeaders(token) {
+  return { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` };
+}
+
+// ─── AUDIT LOG (Faz 0 — kim ne zaman ne değiştirdi) ───────────────────────────
+async function writeAudit(token, user, action, tableName, recordId, before, after) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/audit_log`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({
+        actor_user_id: user?.id || null, actor_email: user?.email || null,
+        action, table_name: tableName, record_id: String(recordId ?? ""),
+        before: before ?? null, after: after ?? null
+      })
+    });
+  } catch(e) { /* audit hatası ana işlemi engellemez */ }
+}
 
 async function dbGetLeads() {
+  const token = await authToken();
+  if (!token) return [];
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/leads?select=*&order=id.desc`, {
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+      headers: authHeaders(token)
     });
     const data = await res.json();
     return Array.isArray(data) ? data.map(l => ({
@@ -17,42 +98,56 @@ async function dbGetLeads() {
   } catch(e) { return []; }
 }
 
-async function dbInsertLead(lead) {
+async function dbInsertLead(lead, user) {
+  const token = await authToken();
+  if (!token) return;
+  const body = { company: lead.company, contact: lead.contact, country: lead.country, region: lead.region, sector: lead.sector, product_type: lead.productType, product: lead.product, value: lead.value || 0, stage: lead.stage || "Lead", whatsapp: lead.whatsapp, email: lead.email, phone: lead.phone, notes: lead.notes };
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
       method: "POST",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", "Prefer": "return=minimal" },
-      body: JSON.stringify({ company: lead.company, contact: lead.contact, country: lead.country, region: lead.region, sector: lead.sector, product_type: lead.productType, product: lead.product, value: lead.value || 0, stage: lead.stage || "Lead", whatsapp: lead.whatsapp, email: lead.email, phone: lead.phone, notes: lead.notes })
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify(body)
     });
+    writeAudit(token, user, "insert", "leads", null, null, body);
   } catch(e) {}
 }
 
-async function dbUpdateLead(id, lead) {
+async function dbUpdateLead(id, lead, user) {
+  const token = await authToken();
+  if (!token) return;
+  const body = { company: lead.company, contact: lead.contact, country: lead.country, region: lead.region, sector: lead.sector, product_type: lead.productType, product: lead.product, value: lead.value || 0, stage: lead.stage, whatsapp: lead.whatsapp, email: lead.email, phone: lead.phone, notes: lead.notes };
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, {
       method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ company: lead.company, contact: lead.contact, country: lead.country, region: lead.region, sector: lead.sector, product_type: lead.productType, product: lead.product, value: lead.value || 0, stage: lead.stage, whatsapp: lead.whatsapp, email: lead.email, phone: lead.phone, notes: lead.notes })
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify(body)
     });
+    writeAudit(token, user, "update", "leads", id, null, body);
   } catch(e) {}
 }
 
-async function dbUpdateStage(id, stage) {
+async function dbUpdateStage(id, stage, user) {
+  const token = await authToken();
+  if (!token) return;
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, {
       method: "PATCH",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
       body: JSON.stringify({ stage })
     });
+    writeAudit(token, user, "update_stage", "leads", id, null, { stage });
   } catch(e) {}
 }
 
-async function dbDeleteLead(id) {
+async function dbDeleteLead(id, user) {
+  const token = await authToken();
+  if (!token) return;
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/leads?id=eq.${id}`, {
       method: "DELETE",
-      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+      headers: authHeaders(token)
     });
+    writeAudit(token, user, "delete", "leads", id, null, null);
   } catch(e) {}
 }
 
@@ -108,26 +203,42 @@ const pill = (color) => ({background:color+"20",color,border:`1px solid ${color}
 
 const inpStyle = {background:C.navy,color:C.ghost,border:`1px solid ${C.border}`,borderRadius:6,padding:"9px 12px",fontSize:14,width:"100%",boxSizing:"border-box",outline:"none"};
 
-// ─── LOGIN ───────────────────────────────────────────────────────────────────
+// ─── LOGIN (Supabase Auth — Faz 0) ─────────────────────────────────────────────
 function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
-  const [error, setError] = useState(false);
-  function tryLogin() {
-    if (pass === PASSWORD) { onLogin(); }
-    else { setError(true); setTimeout(()=>setError(false), 2000); }
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function tryLogin() {
+    if (!email || !pass) return;
+    setLoading(true); setError("");
+    try {
+      const session = await authLogin(email, pass);
+      onLogin(session);
+    } catch(e) {
+      setError(e.message || "Giriş başarısız");
+    }
+    setLoading(false);
   }
+
   return (
     <div style={{fontFamily:"'Inter',sans-serif",background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:40,width:320,textAlign:"center"}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:40,width:340,textAlign:"center"}}>
         <div style={{fontSize:28,fontWeight:900,letterSpacing:4,color:C.amber,marginBottom:4}}>GNDOS</div>
         <div style={{fontSize:11,color:C.smoke,letterSpacing:2,marginBottom:32}}>GLOBAL OPS PLATFORM</div>
-        <input type="password" placeholder="Şifre girin..." value={pass}
+        <input type="email" placeholder="E-posta" value={email} autoComplete="username"
+          onChange={e=>setEmail(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&tryLogin()}
+          style={{...inpStyle,marginBottom:10,border:`1px solid ${error?C.rust:C.border}`}}
+        />
+        <input type="password" placeholder="Şifre" value={pass} autoComplete="current-password"
           onChange={e=>setPass(e.target.value)}
           onKeyDown={e=>e.key==="Enter"&&tryLogin()}
-          style={{...inpStyle,textAlign:"center",letterSpacing:4,marginBottom:12,border:`1px solid ${error?C.rust:C.border}`}}
+          style={{...inpStyle,marginBottom:12,border:`1px solid ${error?C.rust:C.border}`}}
         />
-        {error && <div style={{color:C.rust,fontSize:12,marginBottom:8}}>Yanlış şifre!</div>}
-        <button onClick={tryLogin} style={{...bs(C.amber,C.navy),width:"100%",padding:11,fontSize:14}}>Giriş Yap</button>
+        {error && <div style={{color:C.rust,fontSize:12,marginBottom:8}}>{error}</div>}
+        <button onClick={tryLogin} disabled={loading} style={{...bs(C.amber,C.navy),width:"100%",padding:11,fontSize:14,opacity:loading?0.7:1}}>{loading?"Giriş yapılıyor...":"Giriş Yap"}</button>
         <div style={{fontSize:11,color:C.muted,marginTop:16}}>Sadece yetkili erişim</div>
       </div>
     </div>
@@ -451,7 +562,7 @@ function FirmaBul({ onAdd }) {
 }
 
 // ─── CRM ──────────────────────────────────────────────────────────────────────
-function CRMModul({ leads, loadLeads }) {
+function CRMModul({ leads, loadLeads, user }) {
   const [sub, setSub] = useState("pipeline");
   const [search, setSearch] = useState("");
   const [fR, setFR] = useState("Tümü");
@@ -478,8 +589,8 @@ function CRMModul({ leads, loadLeads }) {
   }),[leads,fR,fS,fSec,fC,search]);
 
   async function handleSave(data) {
-    if (editLead) { await dbUpdateLead(editLead.id, data); }
-    else { await dbInsertLead(data); }
+    if (editLead) { await dbUpdateLead(editLead.id, data, user); }
+    else { await dbInsertLead(data, user); }
     await loadLeads();
     setShowForm(false);
     setEditLead(null);
@@ -487,14 +598,14 @@ function CRMModul({ leads, loadLeads }) {
 
   async function handleDelete(id) {
     if (window.confirm("Bu lead silinsin mi?")) {
-      await dbDeleteLead(id);
+      await dbDeleteLead(id, user);
       await loadLeads();
       setDetail(null);
     }
   }
 
   async function handleStageChange(id, stage) {
-    await dbUpdateStage(id, stage);
+    await dbUpdateStage(id, stage, user);
     await loadLeads();
   }
 
@@ -515,7 +626,7 @@ function CRMModul({ leads, loadLeads }) {
         <button onClick={()=>{setEditLead(null);setShowForm(true);}} style={bs(C.amber,C.navy,{marginLeft:"auto"})}>+ Yeni Lead</button>
       </div>
 
-      {sub==="firma"&&<FirmaBul onAdd={async(l)=>{await dbInsertLead(l);await loadLeads();}}/>}
+      {sub==="firma"&&<FirmaBul onAdd={async(l)=>{await dbInsertLead(l, user);await loadLeads();}}/>}
 
       {(sub==="pipeline"||sub==="list")&&(
         <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
@@ -669,10 +780,12 @@ function SimpleModule({title, content}) {
 
 // ─── ANA UYGULAMA ─────────────────────────────────────────────────────────────
 export default function GNDOS() {
-  const [loggedIn, setLoggedIn] = useState(()=>{ try{ return localStorage.getItem("gndos_auth")==="1"; }catch(e){ return false; } });
+  const [session, setSessionState] = useState(()=>getSession());
   const [active, setActive] = useState("home");
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(false);
+  const loggedIn = !!session;
+  const user = session?.user;
 
   async function loadLeads() {
     setLoading(true);
@@ -683,9 +796,14 @@ export default function GNDOS() {
 
   useEffect(()=>{ if(loggedIn) loadLeads(); },[loggedIn]);
 
-  function handleLogin() {
-    try{ localStorage.setItem("gndos_auth","1"); }catch(e){}
-    setLoggedIn(true);
+  function handleLogin(newSession) {
+    setSessionState(newSession);
+  }
+
+  function handleLogout() {
+    clearSession();
+    setSessionState(null);
+    setLeads([]);
   }
 
   if (!loggedIn) return <LoginScreen onLogin={handleLogin}/>;
@@ -707,14 +825,14 @@ export default function GNDOS() {
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6,paddingLeft:16,borderLeft:`1px solid ${C.border}`,flexShrink:0}}>
           <div style={{width:7,height:7,borderRadius:"50%",background:C.green}}/>
-          <span style={{fontSize:11,color:C.smoke}}>Online</span>
-          <button onClick={()=>{try{localStorage.removeItem("gndos_auth");}catch(e){}setLoggedIn(false);}} style={{...ob(C.smoke),fontSize:10,padding:"3px 8px",marginLeft:8}}>Çıkış</button>
+          <span style={{fontSize:11,color:C.smoke}}>{user?.email || "Online"}</span>
+          <button onClick={handleLogout} style={{...ob(C.smoke),fontSize:10,padding:"3px 8px",marginLeft:8}}>Çıkış</button>
         </div>
       </div>
 
       <div style={{flex:1,padding:"24px 28px",overflowY:"auto",maxWidth:1400,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
         {active==="home"&&<CommandCenter leads={leads} setActive={setActive} loadLeads={loadLeads}/>}
-        {active==="crm"&&<CRMModul leads={leads} loadLeads={loadLeads}/>}
+        {active==="crm"&&<CRMModul leads={leads} loadLeads={loadLeads} user={user}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
