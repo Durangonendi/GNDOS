@@ -68,6 +68,56 @@ function authHeaders(token) {
   return { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` };
 }
 
+// ─── NORMALİZASYON (Faz 2 — Import Center'da kullanılıyor) ────────────────────
+const TR_MAP = { ç:"c",ğ:"g",ı:"i",ö:"o",ş:"s",ü:"u",Ç:"c",Ğ:"g",İ:"i",Ö:"o",Ş:"s",Ü:"u" };
+function nameSearchable(s) {
+  if (!s) return "";
+  return s.toString().split("").map(ch => TR_MAP[ch] || ch).join("")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+function normalizePhone(raw) {
+  if (!raw) return null;
+  let digits = String(raw).replace(/[^\d+]/g, "");
+  if (!digits) return null;
+  if (!digits.startsWith("+")) {
+    digits = digits.startsWith("0") ? "+90" + digits.slice(1) : "+" + digits;
+  }
+  return digits;
+}
+function normalizeEmail(raw) {
+  if (!raw) return null;
+  const e = String(raw).trim().toLowerCase();
+  return e.includes("@") ? e : null;
+}
+// Esnek sütun eşleştirme: farklı Excel şablonlarında başlıklar değişebilir.
+const COLUMN_ALIASES = {
+  company: ["firma", "company", "şirket", "sirket", "firma adı", "firma/saha", "company name"],
+  country: ["ülke", "ulke", "country"],
+  region: ["bölge", "bolge", "region", "il", "il/ilçe", "şehir", "sehir"],
+  sector: ["sektör", "sektor", "sector"],
+  contact: ["kişi", "kisi", "contact", "yetkili", "yetkili kişi"],
+  phone: ["telefon", "phone", "tel"],
+  whatsapp: ["whatsapp"],
+  email: ["email", "e-posta", "eposta"],
+  notes: ["not", "notlar", "notes", "açıklama", "aciklama"],
+};
+function findColumn(headerRow, aliases) {
+  const idx = headerRow.findIndex(h => aliases.includes(String(h || "").trim().toLowerCase()));
+  return idx;
+}
+
+// ─── AI (Faz 7 — backend /api/ai üzerinden, anahtar tarayıcıya hiç inmiyor) ───
+async function callAI(system, userMessage) {
+  const res = await fetch("/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ system, messages: [{ role: "user", content: userMessage }] }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error || "AI hatası");
+  return data.reply || "";
+}
+
 // ─── AUDIT LOG (Faz 0 — kim ne zaman ne değiştirdi) ───────────────────────────
 async function writeAudit(token, user, action, tableName, recordId, before, after) {
   try {
@@ -184,6 +234,9 @@ const ULKELER = {
 
 const MODULES = [
   {key:"crm",icon:"🌍",label:"Global CRM"},
+  {key:"companies",icon:"🏢",label:"Companies"},
+  {key:"campaigns",icon:"📣",label:"Campaigns"},
+  {key:"import",icon:"📥",label:"Import Center"},
   {key:"makine",icon:"🏗️",label:"Equipment Center"},
   {key:"stok",icon:"📦",label:"Inventory"},
   {key:"finans",icon:"💰",label:"Finance"},
@@ -339,6 +392,30 @@ function CommandCenter({ leads, setActive, loadLeads }) {
   const [priorities, setPriorities] = useState("");
   const [prioLoading, setPrioLoading] = useState(false);
   const [prioOpen, setPrioOpen] = useState(false);
+  const [funnel, setFunnel] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const token = await authToken();
+      if (!token) return;
+      const h = { ...authHeaders(token), Prefer: "count=exact", Range: "0-0" };
+      const count = async (path) => {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: h });
+        const cr = r.headers.get("Content-Range");
+        return cr ? Number(cr.split("/")[1]) : 0;
+      };
+      const [totalCompanies, withPhone, withWhatsapp, withEmail, sentToday, activeCampaigns, leadsCount] = await Promise.all([
+        count("companies?select=id"),
+        count("contact_methods?select=id&type=eq.phone"),
+        count("contact_methods?select=id&type=eq.whatsapp"),
+        count("contact_methods?select=id&type=eq.email"),
+        count(`outbound_messages?select=id&status=eq.sent&sent_at=gte.${new Date().toISOString().slice(0,10)}`),
+        count("campaigns?select=id&status=eq.active"),
+        count("leads?select=id"),
+      ]);
+      setFunnel({ totalCompanies, withPhone, withWhatsapp, withEmail, sentToday, activeCampaigns, leadsCount });
+    })();
+  }, []);
 
   const hour = new Date().getHours();
   const greeting = hour<12?"Günaydın":hour<18?"İyi öğleden sonralar":"İyi akşamlar";
@@ -349,10 +426,8 @@ function CommandCenter({ leads, setActive, loadLeads }) {
     setBriefingLoading(true);
     const prompt = `Günaydın Duran. ile başla. Global iş makinesi satışı için kısa sabah brifing yaz (Türkçe, 5-6 madde, emoji kullan). Leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}`;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
-      const data = await res.json();
-      setBriefing(data.content?.map(i=>i.text||"").join("")||"");
-    } catch(e){setBriefing("Bağlantı hatası.");}
+      setBriefing(await callAI(null, prompt));
+    } catch(e){setBriefing("Bağlantı hatası: " + e.message);}
     setBriefingLoading(false);
   }
 
@@ -360,10 +435,8 @@ function CommandCenter({ leads, setActive, loadLeads }) {
     setPrioLoading(true); setPrioOpen(true);
     const prompt = `İş makinesi satış uzmanısın. Bu leadleri öncelik sırasına koy: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa.`;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,messages:[{role:"user",content:prompt}]})});
-      const data = await res.json();
-      setPriorities(data.content?.map(i=>i.text||"").join("")||"");
-    } catch(e){setPriorities("Bağlantı hatası.");}
+      setPriorities(await callAI(null, prompt));
+    } catch(e){setPriorities("Bağlantı hatası: " + e.message);}
     setPrioLoading(false);
   }
 
@@ -404,6 +477,28 @@ function CommandCenter({ leads, setActive, loadLeads }) {
           </div>
         ))}
       </div>
+
+      {funnel && (
+        <div style={cardSt({padding:20,marginBottom:20})}>
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>📊 VERİTABANI DURUMU &amp; FUNNEL</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:10}}>
+            {[
+              {l:"FİRMA",v:funnel.totalCompanies},
+              {l:"TELEFONLU",v:funnel.withPhone},
+              {l:"WHATSAPP'LI",v:funnel.withWhatsapp},
+              {l:"E-POSTALI",v:funnel.withEmail},
+              {l:"BUGÜN GÖNDERİLEN",v:funnel.sentToday},
+              {l:"AKTİF KAMPANYA",v:funnel.activeCampaigns},
+              {l:"LEAD",v:funnel.leadsCount},
+            ].map(k=>(
+              <div key={k.l} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
+                <div style={{fontSize:17,fontWeight:800,color:C.ghost}}>{k.v}</div>
+                <div style={{fontSize:9,color:C.smoke,marginTop:3}}>{k.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
         <div style={cardSt({padding:20})}>
@@ -490,16 +585,12 @@ function FirmaBul({ onAdd }) {
   const [error,setError]=useState("");
 
   async function ara() {
-    setLoading(true);setFirmalar([]);setAdded({});setError("");
-    const lok=mode==="TR"?`${il}, Türkiye`:ulke;
-    const prompt=`${lok} bölgesindeki ${sektor} sektöründe iş makinesi firmaları. SADECE JSON:\n[{"company":"","contact":"","phone":"","whatsapp":"","email":"","address":"","notes":""}]\n10 firma, gerçekçi isimler.`;
-    try {
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:prompt}]})});
-      const data=await res.json();
-      const text=data.content?.map(i=>i.text||"").join("")||"";
-      setFirmalar(JSON.parse(text.replace(/```json|```/g,"").trim()));
-    } catch(e){setError("API bağlantısı yok. API key gerekli.");}
-    setLoading(false);
+    // Faz 7 notu: bu özellik daha önce AI'ye GERÇEK olmayan, uydurma firma
+    // isimleri ürettiriyordu ("gerçekçi isimler" — hayali veri). Bu, GNDOS'ta
+    // baştan beri uygulanan "asla uydurma veri ekleme, bulunamayan alanı boş
+    // bırak" kuralına aykırı olduğu için kapatıldı. Gerçek firma verisi için
+    // Import Center (Excel/CSV içe aktarma) kullanılmalı.
+    setError("Bu özellik veri kalitesi nedeniyle kapatıldı — AI'ye gerçek olmayan firma bilgisi ürettiriyordu. Gerçek firmalar için Import Center'ı kullan.");
   }
 
   return (
@@ -557,6 +648,457 @@ function FirmaBul({ onAdd }) {
         </div>
       )}
       {!loading&&firmalar.length===0&&<div style={{textAlign:"center",padding:60,color:C.smoke}}><div style={{fontSize:48,marginBottom:12}}>🔍</div><div>Bölge + sektör seç, Firma Ara'ya bas</div></div>}
+    </div>
+  );
+}
+
+// ─── COMPANIES (Faz 1/3 — server-side sayfalama + Activity Log timeline) ──────
+const PAGE_SIZE = 30;
+
+function CompanyDetail({ companyId, onClose }) {
+  const [company, setCompany] = useState(null);
+  const [methods, setMethods] = useState([]);
+  const [activity, setActivity] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const token = await authToken();
+      if (!token) return;
+      const h = authHeaders(token);
+      const [cRes, mRes, aRes] = await Promise.all([
+        fetch(`${SUPABASE_URL}/rest/v1/companies?id=eq.${companyId}&select=*`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/contact_methods?company_id=eq.${companyId}&select=*`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/activity_log?company_id=eq.${companyId}&select=*&order=occurred_at.desc&limit=50`, { headers: h }),
+      ]);
+      const [c, m, a] = await Promise.all([cRes.json(), mRes.json(), aRes.json()]);
+      if (!cancelled) { setCompany(c[0]); setMethods(m); setActivity(a); setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{...cardSt({padding:28}),width:"100%",maxWidth:600,maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+          <div style={{fontSize:19,fontWeight:800,color:C.amber}}>{loading ? "Yükleniyor..." : company?.name_original}</div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:22}}>✕</button>
+        </div>
+        {!loading && company && (
+          <>
+            <div style={{fontSize:12,color:C.smoke,marginBottom:16}}>{company.country} · {company.region} · {company.sector}</div>
+            <div style={{fontSize:11,color:C.smoke,marginBottom:8,fontWeight:700}}>İLETİŞİM YÖNTEMLERİ</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>
+              {methods.length === 0 && <span style={{fontSize:12,color:C.smoke}}>Kayıt yok</span>}
+              {methods.map(m => (
+                <span key={m.id} style={pill(m.type==="email"?C.blue:C.green)}>{m.type}: {m.value_original}</span>
+              ))}
+            </div>
+            {company.notes && (
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:11,color:C.smoke,marginBottom:6,fontWeight:700}}>NOTLAR</div>
+                <div style={{background:C.navy,borderRadius:6,padding:"8px 12px",fontSize:13}}>{company.notes}</div>
+              </div>
+            )}
+            <div style={{fontSize:11,color:C.smoke,marginBottom:8,fontWeight:700}}>İLETİŞİM GEÇMİŞİ (ACTIVITY LOG)</div>
+            {activity.length === 0 && <div style={{fontSize:12,color:C.smoke,padding:"12px 0"}}>Henüz kayıtlı bir işlem yok.</div>}
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {activity.map(a => (
+                <div key={a.id} style={{display:"flex",gap:10,padding:"9px 12px",background:C.panel,borderRadius:6,border:`1px solid ${C.border}`}}>
+                  <span style={{fontSize:11,color:C.smoke,minWidth:110}}>{new Date(a.occurred_at).toLocaleString("tr-TR")}</span>
+                  <span style={{fontSize:12,flex:1}}><b>{a.channel || "—"}</b> · {a.action}{a.result ? ` (${a.result})` : ""}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CompaniesModul() {
+  const [rowsData, setRowsData] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [detailId, setDetailId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const token = await authToken();
+    if (!token) { setLoading(false); return; }
+    const from = page * PAGE_SIZE, to = from + PAGE_SIZE - 1;
+    let url = `${SUPABASE_URL}/rest/v1/companies?select=id,name_original,country,sector,verification_status&order=id.desc`;
+    if (search.trim()) url += `&name_searchable=ilike.*${encodeURIComponent(nameSearchable(search))}*`;
+    const res = await fetch(url, { headers: { ...authHeaders(token), Range: `${from}-${to}`, Prefer: "count=exact" } });
+    const data = await res.json();
+    const range = res.headers.get("Content-Range");
+    setTotal(range ? Number(range.split("/")[1]) : data.length);
+    setRowsData(data);
+    setLoading(false);
+  }, [page, search]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+        <input style={{...inpStyle,width:260}} placeholder="🔍 Firma ara..." value={search}
+          onChange={e=>{setSearch(e.target.value); setPage(0);}}/>
+        <span style={{fontSize:12,color:C.smoke}}>{total} firma · sayfa {page+1}/{pageCount}</span>
+        <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+          <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={ob(C.smoke)}>← Önceki</button>
+          <button onClick={()=>setPage(p=>Math.min(pageCount-1,p+1))} disabled={page>=pageCount-1} style={ob(C.smoke)}>Sonraki →</button>
+        </div>
+      </div>
+      {loading ? <div style={{color:C.smoke,padding:20}}>Yükleniyor...</div> : (
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr>{["FİRMA","ÜLKE","SEKTÖR","DURUM"].map(h=><th key={h} style={{background:C.panel,color:C.smoke,padding:"9px 12px",textAlign:"left",fontSize:11,borderBottom:`1px solid ${C.border}`}}>{h}</th>)}</tr></thead>
+            <tbody>{rowsData.map(r=>(
+              <tr key={r.id} onClick={()=>setDetailId(r.id)} style={{cursor:"pointer"}}>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:700}}>{r.name_original}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}}>{r.country}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}}>{r.sector}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`}}><span style={pill(r.verification_status==="verified"?C.green:C.smoke)}>{r.verification_status}</span></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {detailId && <CompanyDetail companyId={detailId} onClose={()=>setDetailId(null)}/>}
+    </div>
+  );
+}
+
+// ─── CAMPAIGN CENTER (Faz 4 — hedef seçimi + kampanya oluşturma) ──────────────
+// Not: gönderim (kuyruk/worker/WhatsApp-Email provider) ayrı bir altyapı
+// gerektirir (bkz. backend/). Burada kampanya + hedef listesi oluşturulur;
+// gönderim altyapısı devreye girdiğinde bu hedefler otomatik işlenir.
+function CampaignCenter() {
+  const [name, setName] = useState("");
+  const [channel, setChannel] = useState("whatsapp");
+  const [fCountry, setFCountry] = useState("");
+  const [fSector, setFSector] = useState("");
+  const [requireMethod, setRequireMethod] = useState(true);
+  const [matchCount, setMatchCount] = useState(null);
+  const [matching, setMatching] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [campaigns, setCampaigns] = useState([]);
+  const [result, setResult] = useState(null);
+
+  const loadCampaigns = useCallback(async () => {
+    const token = await authToken();
+    if (!token) return;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/campaigns?select=*&order=id.desc&limit=20`, { headers: authHeaders(token) });
+    setCampaigns(await res.json());
+  }, []);
+  useEffect(() => { loadCampaigns(); }, [loadCampaigns]);
+
+  function buildTargetUrl() {
+    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,company_id,companies(country,sector)&type=eq.${channel === "email" ? "email" : "whatsapp"}`;
+    return url;
+  }
+
+  async function previewMatch() {
+    setMatching(true);
+    const token = await authToken();
+    if (!token) { setMatching(false); return; }
+    // contact_methods + companies join filtresi PostgREST embedded filter ile:
+    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,companies!inner(country,sector)&type=eq.${channel === "email" ? "email" : "whatsapp"}`;
+    if (fCountry) url += `&companies.country=eq.${encodeURIComponent(fCountry)}`;
+    if (fSector) url += `&companies.sector=eq.${encodeURIComponent(fSector)}`;
+    const res = await fetch(url, { headers: { ...authHeaders(token), Prefer: "count=exact", Range: "0-0" } });
+    const range = res.headers.get("Content-Range");
+    setMatchCount(range ? Number(range.split("/")[1]) : 0);
+    setMatching(false);
+  }
+
+  async function createCampaign() {
+    if (!name.trim()) return;
+    setCreating(true);
+    setResult(null);
+    const token = await authToken();
+    if (!token) { setCreating(false); return; }
+
+    const cRes = await fetch(`${SUPABASE_URL}/rest/v1/campaigns`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify({
+        name, channel, status: "draft",
+        filter_json: { country: fCountry || null, sector: fSector || null, requireMethod },
+      }),
+    });
+    const cData = await cRes.json();
+    if (!cRes.ok) { setResult({ error: JSON.stringify(cData) }); setCreating(false); return; }
+    const campaignId = cData[0].id;
+
+    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,company_id,companies!inner(country,sector)&type=eq.${channel === "email" ? "email" : "whatsapp"}`;
+    if (fCountry) url += `&companies.country=eq.${encodeURIComponent(fCountry)}`;
+    if (fSector) url += `&companies.sector=eq.${encodeURIComponent(fSector)}`;
+    const mRes = await fetch(url, { headers: authHeaders(token) });
+    const methods = await mRes.json();
+
+    let added = 0;
+    for (const m of methods) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/campaign_targets`, {
+        method: "POST",
+        headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal,resolution=ignore-duplicates" },
+        body: JSON.stringify({ campaign_id: campaignId, contact_method_id: m.id, company_id: m.company_id }),
+      });
+      if (r.ok) added++;
+    }
+
+    setResult({ campaignId, added });
+    setName(""); setMatchCount(null);
+    loadCampaigns();
+    setCreating(false);
+  }
+
+  return (
+    <div>
+      <div style={cardSt({ padding: 24, marginBottom: 20 })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>📣 Yeni Kampanya</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+          <div><label style={{fontSize:11,color:C.smoke}}>KAMPANYA ADI</label><input style={inpStyle} value={name} onChange={e=>setName(e.target.value)} placeholder="Örn: TR Hafriyat – Marketplace"/></div>
+          <div><label style={{fontSize:11,color:C.smoke}}>KANAL</label>
+            <select style={{...inpStyle,cursor:"pointer"}} value={channel} onChange={e=>{setChannel(e.target.value); setMatchCount(null);}}>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="email">E-posta</option>
+            </select>
+          </div>
+          <div><label style={{fontSize:11,color:C.smoke}}>ÜLKE (opsiyonel)</label><input style={inpStyle} value={fCountry} onChange={e=>{setFCountry(e.target.value); setMatchCount(null);}} placeholder="Örn: Türkiye"/></div>
+          <div><label style={{fontSize:11,color:C.smoke}}>SEKTÖR (opsiyonel)</label><input style={inpStyle} value={fSector} onChange={e=>{setFSector(e.target.value); setMatchCount(null);}} placeholder="Örn: Hafriyat"/></div>
+        </div>
+        <div style={{display:"flex",gap:10,marginBottom:14}}>
+          <button onClick={previewMatch} disabled={matching} style={ob(C.blue)}>{matching?"Hesaplanıyor...":"🔍 Hedef Kitleyi Say"}</button>
+          {matchCount !== null && <span style={{fontSize:13,color:C.ghost,alignSelf:"center"}}>{matchCount} kişi eşleşiyor</span>}
+        </div>
+        <button onClick={createCampaign} disabled={creating || !name.trim()} style={{...bs(C.amber,C.navy),width:"100%",opacity:creating?0.7:1}}>
+          {creating ? "⏳ Oluşturuluyor..." : "Kampanyayı ve Hedef Listesini Oluştur"}
+        </button>
+        {result && !result.error && <div style={{marginTop:12,fontSize:13,color:C.green}}>✅ Kampanya oluşturuldu, {result.added} hedef eklendi. Gönderim altyapısı (Faz 5/6) hazır olduğunda otomatik işlenecek.</div>}
+        {result?.error && <div style={{marginTop:12,fontSize:13,color:C.rust}}>Hata: {result.error}</div>}
+      </div>
+
+      <div style={cardSt({ padding: 24 })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>Kampanyalar</div>
+        {campaigns.length === 0 && <div style={{color:C.smoke,fontSize:13}}>Henüz kampanya yok.</div>}
+        {campaigns.map(c => (
+          <div key={c.id} style={{display:"flex",justifyContent:"space-between",padding:"10px 14px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
+            <div><b>{c.name}</b> <span style={{color:C.smoke,fontSize:12}}>· {c.channel}</span></div>
+            <span style={pill(c.status==="active"?C.green:C.smoke)}>{c.status}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── IMPORT CENTER (Faz 2) ─────────────────────────────────────────────────────
+function ImportCenter({ user }) {
+  const [rows, setRows] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const [fileName, setFileName] = useState("");
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    const XLSX = await import("xlsx");
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    if (!grid.length) { setRows([]); setPreview(null); return; }
+
+    const header = grid[0];
+    const col = {
+      company: findColumn(header, COLUMN_ALIASES.company),
+      country: findColumn(header, COLUMN_ALIASES.country),
+      region: findColumn(header, COLUMN_ALIASES.region),
+      sector: findColumn(header, COLUMN_ALIASES.sector),
+      contact: findColumn(header, COLUMN_ALIASES.contact),
+      phone: findColumn(header, COLUMN_ALIASES.phone),
+      whatsapp: findColumn(header, COLUMN_ALIASES.whatsapp),
+      email: findColumn(header, COLUMN_ALIASES.email),
+      notes: findColumn(header, COLUMN_ALIASES.notes),
+    };
+    const get = (r, key) => (col[key] >= 0 ? r[col[key]] : "");
+
+    const parsed = grid.slice(1)
+      .filter(r => r.some(c => String(c || "").trim() !== ""))
+      .map(r => ({
+        company: String(get(r, "company") || "").trim(),
+        country: String(get(r, "country") || "").trim(),
+        region: String(get(r, "region") || "").trim(),
+        sector: String(get(r, "sector") || "").trim(),
+        contact: String(get(r, "contact") || "").trim(),
+        phone: String(get(r, "phone") || "").trim(),
+        whatsapp: String(get(r, "whatsapp") || "").trim(),
+        email: String(get(r, "email") || "").trim(),
+        notes: String(get(r, "notes") || "").trim(),
+      }));
+
+    setRows(parsed);
+
+    // Var olan normalize edilmiş telefon/email'leri çekip duplicate tahmini yap.
+    const token = await authToken();
+    const existingPhones = new Set();
+    const existingEmails = new Set();
+    if (token) {
+      let offset = 0;
+      while (true) {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?select=type,value_normalized&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
+        const d = await r.json();
+        if (!Array.isArray(d) || d.length === 0) break;
+        d.forEach(m => { if (m.type === "email") existingEmails.add(m.value_normalized); else existingPhones.add(m.value_normalized); });
+        if (d.length < 1000) break;
+        offset += 1000;
+      }
+    }
+
+    let newCompanyCount = 0, dupePhone = 0, dupeEmail = 0, invalidPhone = 0, invalidEmail = 0, noCompanyName = 0;
+    parsed.forEach(row => {
+      if (!row.company) noCompanyName++; else newCompanyCount++;
+      const pn = normalizePhone(row.phone);
+      const en = normalizeEmail(row.email);
+      if (row.phone && !pn) invalidPhone++;
+      if (row.email && !en) invalidEmail++;
+      if (pn && existingPhones.has(pn)) dupePhone++;
+      if (en && existingEmails.has(en)) dupeEmail++;
+    });
+
+    setPreview({
+      total: parsed.length, newCompanyCount, noCompanyName,
+      dupePhone, dupeEmail, invalidPhone, invalidEmail,
+    });
+  }
+
+  async function tryInsertMethod(companyId, contactId, type, original, normalized, isPrimary) {
+    const token = await authToken();
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ company_id: companyId, contact_id: contactId, type, value_original: original, value_normalized: normalized, is_primary: isPrimary }),
+    });
+    return res.ok || res.status === 409;
+  }
+
+  async function runImport() {
+    if (!rows || !rows.length) return;
+    setImporting(true);
+    setProgress(0);
+    const stats = { companies: 0, contacts: 0, methods: 0, skipped: 0, errors: 0 };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row.company) { stats.skipped++; setProgress(i + 1); continue; }
+      try {
+        const token = await authToken();
+        if (!token) throw new Error("oturum yok");
+
+        const cRes = await fetch(`${SUPABASE_URL}/rest/v1/companies`, {
+          method: "POST",
+          headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+          body: JSON.stringify({
+            name_original: row.company, name_searchable: nameSearchable(row.company),
+            country: row.country || null, region: row.region || null, sector: row.sector || null,
+            notes: row.notes || null, data_source: "import_center", verification_status: "unverified",
+            owner_user_id: user?.id || null,
+          }),
+        });
+        const cData = await cRes.json();
+        if (!cRes.ok) throw new Error(JSON.stringify(cData));
+        const companyId = cData[0].id;
+        stats.companies++;
+
+        const conRes = await fetch(`${SUPABASE_URL}/rest/v1/contacts`, {
+          method: "POST",
+          headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+          body: JSON.stringify({ company_id: companyId, person_name: row.contact || null, status: "Gönderilmedi" }),
+        });
+        const conData = await conRes.json();
+        if (!conRes.ok) throw new Error(JSON.stringify(conData));
+        const contactId = conData[0].id;
+        stats.contacts++;
+
+        const pn = normalizePhone(row.phone);
+        const wn = normalizePhone(row.whatsapp);
+        const en = normalizeEmail(row.email);
+        if (pn && await tryInsertMethod(companyId, contactId, "phone", row.phone, pn, true)) stats.methods++;
+        if (wn && wn !== pn && await tryInsertMethod(companyId, contactId, "whatsapp", row.whatsapp, wn, false)) stats.methods++;
+        if (en && await tryInsertMethod(companyId, contactId, "email", row.email, en, !pn)) stats.methods++;
+      } catch (e) {
+        stats.errors++;
+      }
+      setProgress(i + 1);
+    }
+
+    setResult(stats);
+    setImporting(false);
+  }
+
+  return (
+    <div>
+      <div style={cardSt({ padding: 24, marginBottom: 20 })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 12 }}>📥 Excel / CSV Yükle</div>
+        <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile}
+          style={{ color: C.ghost, fontSize: 13 }} />
+        {fileName && <div style={{ fontSize: 12, color: C.smoke, marginTop: 8 }}>{fileName} — {rows ? rows.length : 0} satır okundu</div>}
+        <div style={{ fontSize: 11, color: C.smoke, marginTop: 10 }}>
+          Beklenen sütunlar (herhangi bir sırada olabilir): Firma, Ülke, Bölge/İl, Sektör, Kişi, Telefon, WhatsApp, E-posta, Not
+        </div>
+      </div>
+
+      {preview && (
+        <div style={cardSt({ padding: 24, marginBottom: 20 })}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>Önizleme</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+            {[
+              { l: "TOPLAM SATIR", v: preview.total, c: C.ghost },
+              { l: "YENİ FİRMA (TAHMİNİ)", v: preview.newCompanyCount, c: C.green },
+              { l: "FİRMA ADI EKSİK", v: preview.noCompanyName, c: C.rust },
+              { l: "TELEFON DUPLICATE", v: preview.dupePhone, c: C.amber },
+              { l: "EMAIL DUPLICATE", v: preview.dupeEmail, c: C.amber },
+              { l: "GEÇERSİZ TELEFON", v: preview.invalidPhone, c: C.rust },
+              { l: "GEÇERSİZ EMAIL", v: preview.invalidEmail, c: C.rust },
+            ].map(k => (
+              <div key={k.l} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: k.c }}>{k.v}</div>
+                <div style={{ fontSize: 10, color: C.smoke, marginTop: 4 }}>{k.l}</div>
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: 12, color: C.smoke, marginTop: 14 }}>
+            Duplicate olarak işaretlenenler otomatik atlanmaz — içe aktarma sırasında veritabanı seviyesinde
+            tekrar kontrol edilir, aynı telefon/email tekrar company_methods'a eklenmez.
+          </p>
+          <button onClick={runImport} disabled={importing || !rows?.length} style={{ ...bs(C.amber, C.navy), width: "100%", marginTop: 8, opacity: importing ? 0.7 : 1 }}>
+            {importing ? `⏳ İçe aktarılıyor... ${progress}/${rows.length}` : "✅ Onayla ve İçe Aktar"}
+          </button>
+        </div>
+      )}
+
+      {result && (
+        <div style={cardSt({ padding: 24, border: `1px solid ${C.green}44`, background: C.greenDim })}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.green, marginBottom: 10 }}>✅ İçe Aktarma Tamamlandı</div>
+          <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+            {result.companies} firma · {result.contacts} kişi · {result.methods} iletişim yöntemi eklendi
+            {result.skipped > 0 && ` · ${result.skipped} satır atlandı (firma adı yok)`}
+            {result.errors > 0 && ` · ${result.errors} hata`}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -740,10 +1282,9 @@ function AICopilot({ leads }) {
     setLoading(true);
     const ctx=`Global iş makinesi satış uzmanısın. Kullanıcı: Duran. Leadler: ${leads.map(l=>`${l.company}(${l.country},${l.stage},$${l.value})`).join(", ")}. Türkçe, kısa cevap.`;
     try {
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:600,system:ctx,messages:[{role:"user",content:msg}]})});
-      const data=await res.json();
-      setMsgs(m=>[...m,{role:"assistant",text:data.content?.map(i=>i.text||"").join("")||"API key gerekli."}]);
-    } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Bağlantı hatası — API key gerekli."}]);}
+      const reply = await callAI(ctx, msg);
+      setMsgs(m=>[...m,{role:"assistant",text:reply||"(boş cevap)"}]);
+    } catch(e){setMsgs(m=>[...m,{role:"assistant",text:"Bağlantı hatası: " + e.message}]);}
     setLoading(false);
   }
 
@@ -833,6 +1374,9 @@ export default function GNDOS() {
       <div style={{flex:1,padding:"24px 28px",overflowY:"auto",maxWidth:1400,width:"100%",margin:"0 auto",boxSizing:"border-box"}}>
         {active==="home"&&<CommandCenter leads={leads} setActive={setActive} loadLeads={loadLeads}/>}
         {active==="crm"&&<CRMModul leads={leads} loadLeads={loadLeads} user={user}/>}
+        {active==="import"&&<ImportCenter user={user}/>}
+        {active==="companies"&&<CompaniesModul/>}
+        {active==="campaigns"&&<CampaignCenter/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
