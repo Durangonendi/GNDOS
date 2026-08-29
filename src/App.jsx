@@ -75,19 +75,45 @@ function nameSearchable(s) {
   return s.toString().split("").map(ch => TR_MAP[ch] || ch).join("")
     .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
-function normalizePhone(raw) {
+// Uygulamada kullanılan ülkeler için çevirme kodu (E.164 tahmini için).
+const COUNTRY_DIAL_CODE = {
+  "Türkiye": "90", "Suudi Arabistan": "966", "BAE": "971", "Katar": "974", "Kuveyt": "965",
+  "Irak": "964", "Umman": "968", "Mısır": "20", "Libya": "218", "Fas": "212", "Cezayir": "213",
+  "Tunus": "216", "Gana": "233", "Nijerya": "234", "Kenya": "254", "Güney Afrika": "27",
+  "Zambia": "260", "Almanya": "49", "Polonya": "48", "Romanya": "40", "Sırbistan": "381",
+  "Ukrayna": "380", "Kazakistan": "7", "Özbekistan": "998", "Türkmenistan": "993",
+  "Azerbaycan": "994", "Pakistan": "92", "Hindistan": "91", "Bangladeş": "880",
+};
+// E.164'e olabildiğince yaklaştırır. countryHint verilirse (satırdaki "Ülke"
+// sütunu) ve numara zaten bir ülke koduyla başlamıyorsa o kodu ekler.
+function normalizePhone(raw, countryHint) {
   if (!raw) return null;
   let digits = String(raw).replace(/[^\d+]/g, "");
   if (!digits) return null;
+  if (digits.startsWith("00")) digits = "+" + digits.slice(2);
   if (!digits.startsWith("+")) {
-    digits = digits.startsWith("0") ? "+90" + digits.slice(1) : "+" + digits;
+    const dial = COUNTRY_DIAL_CODE[countryHint];
+    if (digits.startsWith("0")) {
+      digits = (dial || "90") + digits.slice(1);
+      digits = "+" + digits;
+    } else if (dial && !digits.startsWith(dial)) {
+      digits = "+" + dial + digits;
+    } else {
+      digits = "+" + digits;
+    }
   }
-  return digits;
+  return digits.length >= 8 ? digits : null;
 }
 function normalizeEmail(raw) {
   if (!raw) return null;
   const e = String(raw).trim().toLowerCase();
-  return e.includes("@") ? e : null;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
+}
+function normalizeDomain(raw) {
+  if (!raw) return null;
+  let d = String(raw).trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "");
+  d = d.split("/")[0];
+  return d.includes(".") ? d : null;
 }
 // Esnek sütun eşleştirme: farklı Excel şablonlarında başlıklar değişebilir.
 const COLUMN_ALIASES = {
@@ -99,6 +125,7 @@ const COLUMN_ALIASES = {
   phone: ["telefon", "phone", "tel"],
   whatsapp: ["whatsapp"],
   email: ["email", "e-posta", "eposta"],
+  website: ["website", "web", "site", "domain", "url"],
   notes: ["not", "notlar", "notes", "açıklama", "aciklama"],
 };
 function findColumn(headerRow, aliases) {
@@ -1266,7 +1293,19 @@ function SendQueue({ user }) {
   );
 }
 
-// ─── IMPORT CENTER (Faz 2) ─────────────────────────────────────────────────────
+// ─── IMPORT CENTER (Faz 2, sertleştirilmiş V1) ─────────────────────────────────
+function downloadCsv(filename, rows) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [headers.join(","), ...rows.map(r => headers.map(h => esc(r[h])).join(","))].join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 function ImportCenter({ user }) {
   const [rows, setRows] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -1297,13 +1336,15 @@ function ImportCenter({ user }) {
       phone: findColumn(header, COLUMN_ALIASES.phone),
       whatsapp: findColumn(header, COLUMN_ALIASES.whatsapp),
       email: findColumn(header, COLUMN_ALIASES.email),
+      website: findColumn(header, COLUMN_ALIASES.website),
       notes: findColumn(header, COLUMN_ALIASES.notes),
     };
     const get = (r, key) => (col[key] >= 0 ? r[col[key]] : "");
 
     const parsed = grid.slice(1)
       .filter(r => r.some(c => String(c || "").trim() !== ""))
-      .map(r => ({
+      .map((r, i) => ({
+        _row: i + 2, // Excel'deki gerçek satır no (1=başlık)
         company: String(get(r, "company") || "").trim(),
         country: String(get(r, "country") || "").trim(),
         region: String(get(r, "region") || "").trim(),
@@ -1312,42 +1353,61 @@ function ImportCenter({ user }) {
         phone: String(get(r, "phone") || "").trim(),
         whatsapp: String(get(r, "whatsapp") || "").trim(),
         email: String(get(r, "email") || "").trim(),
+        website: String(get(r, "website") || "").trim(),
         notes: String(get(r, "notes") || "").trim(),
       }));
 
-    setRows(parsed);
-
-    // Var olan normalize edilmiş telefon/email'leri çekip duplicate tahmini yap.
+    // Var olan iletişim yöntemlerini (telefon/whatsapp/email) ve firma domain'lerini
+    // company_id ile birlikte çekip gerçek eşleşme haritası kur (dedup + güncelleme için).
     const token = await authToken();
-    const existingPhones = new Set();
-    const existingEmails = new Set();
+    const methodMap = new Map(); // value_normalized -> {company_id, contact_id}
+    const domainMap = new Map(); // website_domain -> company_id
     if (token) {
       let offset = 0;
       while (true) {
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?select=type,value_normalized&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?select=type,value_normalized,company_id,contact_id&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
         const d = await r.json();
         if (!Array.isArray(d) || d.length === 0) break;
-        d.forEach(m => { if (m.type === "email") existingEmails.add(m.value_normalized); else existingPhones.add(m.value_normalized); });
+        d.forEach(m => methodMap.set(m.value_normalized, { company_id: m.company_id, contact_id: m.contact_id }));
+        if (d.length < 1000) break;
+        offset += 1000;
+      }
+      offset = 0;
+      while (true) {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/companies?select=id,website_domain&website_domain=not.is.null&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
+        const d = await r.json();
+        if (!Array.isArray(d) || d.length === 0) break;
+        d.forEach(c => { if (c.website_domain) domainMap.set(c.website_domain, c.id); });
         if (d.length < 1000) break;
         offset += 1000;
       }
     }
 
-    let newCompanyCount = 0, dupePhone = 0, dupeEmail = 0, invalidPhone = 0, invalidEmail = 0, noCompanyName = 0;
-    parsed.forEach(row => {
-      if (!row.company) noCompanyName++; else newCompanyCount++;
-      const pn = normalizePhone(row.phone);
+    const seenInFile = new Set(); // bu dosya içindeki tekrarları da yakala
+    let stNew = 0, stUpdate = 0, stDupe = 0, stError = 0;
+    const classified = parsed.map(row => {
+      const pn = normalizePhone(row.phone, row.country);
+      const wn = normalizePhone(row.whatsapp, row.country);
       const en = normalizeEmail(row.email);
-      if (row.phone && !pn) invalidPhone++;
-      if (row.email && !en) invalidEmail++;
-      if (pn && existingPhones.has(pn)) dupePhone++;
-      if (en && existingEmails.has(en)) dupeEmail++;
+      const dn = normalizeDomain(row.website);
+
+      if (!row.company && !pn && !en) { stError++; return { ...row, _status: "HATALI", _reason: "Firma adı, telefon veya e-posta yok" }; }
+      if (row.phone && !pn) { stError++; return { ...row, _status: "HATALI", _reason: "Telefon numarası okunamadı" }; }
+      if (row.email && !en) { stError++; return { ...row, _status: "HATALI", _reason: "E-posta geçersiz" }; }
+
+      const fileKey = pn || en || dn || nameSearchable(row.company);
+      if (fileKey && seenInFile.has(fileKey)) { stDupe++; return { ...row, _status: "DUPLICATE", _reason: "Dosya içinde tekrar ediyor" }; }
+      if (fileKey) seenInFile.add(fileKey);
+
+      const match = (pn && methodMap.get(pn)) || (wn && methodMap.get(wn)) || (en && methodMap.get(en)) || (dn && domainMap.has(dn) ? { company_id: domainMap.get(dn) } : null);
+      if (match) { stUpdate++; return { ...row, _status: "GÜNCELLENECEK", _matchCompanyId: match.company_id, _matchContactId: match.contact_id }; }
+
+      stNew++;
+      return { ...row, _status: "YENİ" };
     });
 
-    setPreview({
-      total: parsed.length, newCompanyCount, noCompanyName,
-      dupePhone, dupeEmail, invalidPhone, invalidEmail,
-    });
+    setRows(classified);
+    setPreview({ total: classified.length, newCount: stNew, updateCount: stUpdate, dupeCount: stDupe, errorCount: stError });
   }
 
   async function tryInsertMethod(companyId, contactId, type, original, normalized, isPrimary) {
@@ -1364,50 +1424,92 @@ function ImportCenter({ user }) {
     if (!rows || !rows.length) return;
     setImporting(true);
     setProgress(0);
-    const stats = { companies: 0, contacts: 0, methods: 0, skipped: 0, errors: 0 };
+    const stats = { newCount: 0, updateCount: 0, dupeCount: 0, errorCount: 0, errorRows: [] };
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row.company) { stats.skipped++; setProgress(i + 1); continue; }
+      if (row._status === "DUPLICATE") { stats.dupeCount++; setProgress(i + 1); continue; }
+      if (row._status === "HATALI") { stats.errorCount++; stats.errorRows.push({ satir: row._row, firma: row.company, telefon: row.phone, hata: row._reason }); setProgress(i + 1); continue; }
+
       try {
         const token = await authToken();
         if (!token) throw new Error("oturum yok");
-
-        const cRes = await fetch(`${SUPABASE_URL}/rest/v1/companies`, {
-          method: "POST",
-          headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
-          body: JSON.stringify({
-            name_original: row.company, name_searchable: nameSearchable(row.company),
-            country: row.country || null, region: row.region || null, sector: row.sector || null,
-            notes: row.notes || null, data_source: "import_center", verification_status: "unverified",
-            owner_user_id: user?.id || null,
-          }),
-        });
-        const cData = await cRes.json();
-        if (!cRes.ok) throw new Error(JSON.stringify(cData));
-        const companyId = cData[0].id;
-        stats.companies++;
-
-        const conRes = await fetch(`${SUPABASE_URL}/rest/v1/contacts`, {
-          method: "POST",
-          headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
-          body: JSON.stringify({ company_id: companyId, person_name: row.contact || null, status: "Gönderilmedi" }),
-        });
-        const conData = await conRes.json();
-        if (!conRes.ok) throw new Error(JSON.stringify(conData));
-        const contactId = conData[0].id;
-        stats.contacts++;
-
-        const pn = normalizePhone(row.phone);
-        const wn = normalizePhone(row.whatsapp);
+        const pn = normalizePhone(row.phone, row.country);
+        const wn = normalizePhone(row.whatsapp, row.country);
         const en = normalizeEmail(row.email);
-        if (pn && await tryInsertMethod(companyId, contactId, "phone", row.phone, pn, true)) stats.methods++;
-        if (wn && wn !== pn && await tryInsertMethod(companyId, contactId, "whatsapp", row.whatsapp, wn, false)) stats.methods++;
-        if (en && await tryInsertMethod(companyId, contactId, "email", row.email, en, !pn)) stats.methods++;
+        const dn = normalizeDomain(row.website);
+
+        let companyId = row._matchCompanyId, contactId = row._matchContactId;
+
+        if (row._status === "GÜNCELLENECEK" && companyId) {
+          // Mevcut firmayı boş alanlarını doldurarak güncelle, tekrar oluşturma.
+          const patch = {};
+          if (row.country) patch.country = row.country;
+          if (row.region) patch.region = row.region;
+          if (row.sector) patch.sector = row.sector;
+          if (dn) patch.website_domain = dn;
+          if (Object.keys(patch).length) {
+            await fetch(`${SUPABASE_URL}/rest/v1/companies?id=eq.${companyId}`, {
+              method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+              body: JSON.stringify(patch),
+            });
+          }
+          if (!contactId) {
+            const conRes = await fetch(`${SUPABASE_URL}/rest/v1/contacts`, {
+              method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+              body: JSON.stringify({ company_id: companyId, person_name: row.contact || null, status: "Gönderilmedi" }),
+            });
+            const conData = await conRes.json();
+            if (conRes.ok) contactId = conData[0].id;
+          }
+          stats.updateCount++;
+        } else {
+          const cRes = await fetch(`${SUPABASE_URL}/rest/v1/companies`, {
+            method: "POST",
+            headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+            body: JSON.stringify({
+              name_original: row.company || row.phone || row.email, name_searchable: nameSearchable(row.company),
+              country: row.country || null, region: row.region || null, sector: row.sector || null,
+              website_domain: dn || null, notes: row.notes || null, data_source: "import_center",
+              verification_status: "unverified", owner_user_id: user?.id || null,
+            }),
+          });
+          const cData = await cRes.json();
+          if (!cRes.ok) throw new Error(JSON.stringify(cData));
+          companyId = cData[0].id;
+
+          const conRes = await fetch(`${SUPABASE_URL}/rest/v1/contacts`, {
+            method: "POST",
+            headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+            body: JSON.stringify({ company_id: companyId, person_name: row.contact || null, status: "Gönderilmedi" }),
+          });
+          const conData = await conRes.json();
+          if (!conRes.ok) throw new Error(JSON.stringify(conData));
+          contactId = conData[0].id;
+          stats.newCount++;
+        }
+
+        if (pn) await tryInsertMethod(companyId, contactId, "phone", row.phone, pn, true);
+        if (wn && wn !== pn) await tryInsertMethod(companyId, contactId, "whatsapp", row.whatsapp, wn, false);
+        if (en) await tryInsertMethod(companyId, contactId, "email", row.email, en, !pn);
       } catch (e) {
-        stats.errors++;
+        stats.errorCount++;
+        stats.errorRows.push({ satir: row._row, firma: row.company, telefon: row.phone, hata: String(e.message || e).slice(0, 200) });
       }
       setProgress(i + 1);
+    }
+
+    const token = await authToken();
+    if (token) {
+      await fetch(`${SUPABASE_URL}/rest/v1/import_batches`, {
+        method: "POST",
+        headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+        body: JSON.stringify({
+          file_name: fileName, imported_by: user?.id || null, imported_by_email: user?.email || null,
+          total_rows: rows.length, new_count: stats.newCount, updated_count: stats.updateCount,
+          duplicate_count: stats.dupeCount, error_count: stats.errorCount, error_rows: stats.errorRows,
+        }),
+      });
     }
 
     setResult(stats);
@@ -1422,22 +1524,20 @@ function ImportCenter({ user }) {
           style={{ color: C.ghost, fontSize: 13 }} />
         {fileName && <div style={{ fontSize: 12, color: C.smoke, marginTop: 8 }}>{fileName} — {rows ? rows.length : 0} satır okundu</div>}
         <div style={{ fontSize: 11, color: C.smoke, marginTop: 10 }}>
-          Beklenen sütunlar (herhangi bir sırada olabilir): Firma, Ülke, Bölge/İl, Sektör, Kişi, Telefon, WhatsApp, E-posta, Not
+          Beklenen sütunlar (herhangi bir sırada olabilir): Firma, Ülke, Bölge/İl, Sektör, Kişi, Telefon, WhatsApp, E-posta, Website, Not
         </div>
       </div>
 
       {preview && (
         <div style={cardSt({ padding: 24, marginBottom: 20 })}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>Önizleme</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
             {[
               { l: "TOPLAM SATIR", v: preview.total, c: C.ghost },
-              { l: "YENİ FİRMA (TAHMİNİ)", v: preview.newCompanyCount, c: C.green },
-              { l: "FİRMA ADI EKSİK", v: preview.noCompanyName, c: C.rust },
-              { l: "TELEFON DUPLICATE", v: preview.dupePhone, c: C.amber },
-              { l: "EMAIL DUPLICATE", v: preview.dupeEmail, c: C.amber },
-              { l: "GEÇERSİZ TELEFON", v: preview.invalidPhone, c: C.rust },
-              { l: "GEÇERSİZ EMAIL", v: preview.invalidEmail, c: C.rust },
+              { l: "YENİ FİRMA", v: preview.newCount, c: C.green },
+              { l: "GÜNCELLENECEK", v: preview.updateCount, c: C.blue },
+              { l: "DUPLICATE (ATLANACAK)", v: preview.dupeCount, c: C.amber },
+              { l: "HATALI", v: preview.errorCount, c: C.rust },
             ].map(k => (
               <div key={k.l} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 20, fontWeight: 800, color: k.c }}>{k.v}</div>
@@ -1445,11 +1545,26 @@ function ImportCenter({ user }) {
               </div>
             ))}
           </div>
-          <p style={{ fontSize: 12, color: C.smoke, marginTop: 14 }}>
-            Duplicate olarak işaretlenenler otomatik atlanmaz — içe aktarma sırasında veritabanı seviyesinde
-            tekrar kontrol edilir, aynı telefon/email tekrar company_methods'a eklenmez.
-          </p>
-          <button onClick={runImport} disabled={importing || !rows?.length} style={{ ...bs(C.amber, C.onAccent), width: "100%", marginTop: 8, opacity: importing ? 0.7 : 1 }}>
+
+          <div style={{ maxHeight: 260, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 14 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr>{["SATIR", "FİRMA", "TELEFON", "DURUM"].map(h => <th key={h} style={{ position: "sticky", top: 0, background: C.panel, color: C.smoke, padding: "6px 10px", textAlign: "left", fontSize: 10, borderBottom: `1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
+              <tbody>{rows.slice(0, 300).map((r, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "5px 10px", borderBottom: `1px solid ${C.border}`, color: C.smoke }}>{r._row}</td>
+                  <td style={{ padding: "5px 10px", borderBottom: `1px solid ${C.border}` }}>{r.company || "—"}</td>
+                  <td style={{ padding: "5px 10px", borderBottom: `1px solid ${C.border}`, color: C.smoke }}>{r.phone || "—"}</td>
+                  <td style={{ padding: "5px 10px", borderBottom: `1px solid ${C.border}` }}>
+                    <span style={pill(r._status === "YENİ" ? C.green : r._status === "GÜNCELLENECEK" ? C.blue : r._status === "DUPLICATE" ? C.amber : C.rust)}>{r._status}</span>
+                    {r._reason && <span style={{ color: C.smoke, marginLeft: 6 }}>{r._reason}</span>}
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+            {rows.length > 300 && <div style={{ padding: 8, fontSize: 11, color: C.smoke, textAlign: "center" }}>... ve {rows.length - 300} satır daha (özet sayılara dahil)</div>}
+          </div>
+
+          <button onClick={runImport} disabled={importing || !rows?.length} style={{ ...bs(C.amber, C.onAccent), width: "100%", opacity: importing ? 0.7 : 1 }}>
             {importing ? `⏳ İçe aktarılıyor... ${progress}/${rows.length}` : "✅ Onayla ve İçe Aktar"}
           </button>
         </div>
@@ -1459,10 +1574,12 @@ function ImportCenter({ user }) {
         <div style={cardSt({ padding: 24, border: `1px solid ${C.green}44`, background: C.greenDim })}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.green, marginBottom: 10 }}>✅ İçe Aktarma Tamamlandı</div>
           <div style={{ fontSize: 13, lineHeight: 1.9 }}>
-            {result.companies} firma · {result.contacts} kişi · {result.methods} iletişim yöntemi eklendi
-            {result.skipped > 0 && ` · ${result.skipped} satır atlandı (firma adı yok)`}
-            {result.errors > 0 && ` · ${result.errors} hata`}
+            {result.newCount} yeni firma · {result.updateCount} güncellendi · {result.dupeCount} duplicate atlandı
+            {result.errorCount > 0 && ` · ${result.errorCount} hatalı satır`}
           </div>
+          {result.errorRows.length > 0 && (
+            <button onClick={() => downloadCsv("import_hatalari.csv", result.errorRows)} style={{ ...ob(C.rust), marginTop: 10 }}>⬇ Hatalı Satırları İndir (CSV)</button>
+          )}
         </div>
       )}
     </div>
