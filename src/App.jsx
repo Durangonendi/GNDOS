@@ -160,6 +160,16 @@ async function writeAudit(token, user, action, tableName, recordId, before, afte
   } catch(e) { /* audit hatası ana işlemi engellemez */ }
 }
 
+async function writeActivity(token, user, fields) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ actor_user_id: user?.id || null, ...fields })
+    });
+  } catch(e) { /* activity log hatası ana işlemi engellemez */ }
+}
+
 async function dbGetLeads() {
   const token = await authToken();
   if (!token) return [];
@@ -186,6 +196,7 @@ async function dbInsertLead(lead, user) {
       body: JSON.stringify(body)
     });
     writeAudit(token, user, "insert", "leads", null, null, body);
+    writeActivity(token, user, { company_id: lead.company_id || null, contact_id: lead.contact_id || null, action: "lead_created", channel: "manual" });
   } catch(e) {}
 }
 
@@ -213,6 +224,7 @@ async function dbUpdateStage(id, stage, user) {
       body: JSON.stringify({ stage })
     });
     writeAudit(token, user, "update_stage", "leads", id, null, { stage });
+    writeActivity(token, user, { lead_id: id, action: "lead_stage_changed", result: stage, metadata: { stage } });
   } catch(e) {}
 }
 
@@ -423,27 +435,61 @@ function CommandCenter({ leads, setActive, loadLeads }) {
   const [prioLoading, setPrioLoading] = useState(false);
   const [prioOpen, setPrioOpen] = useState(false);
   const [funnel, setFunnel] = useState(null);
+  const [today_, setToday_] = useState(null);
+  const [followupsToday, setFollowupsToday] = useState([]);
+  const [perf, setPerf] = useState(null);
 
   useEffect(() => {
     (async () => {
       const token = await authToken();
       if (!token) return;
       const h = { ...authHeaders(token), Prefer: "count=exact", Range: "0-0" };
+      const todayStr = today();
+      const todayStartIso = new Date(todayStr + "T00:00:00").toISOString();
       const count = async (path) => {
         const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: h });
         const cr = r.headers.get("Content-Range");
         return cr ? Number(cr.split("/")[1]) : 0;
       };
-      const [totalCompanies, withPhone, withWhatsapp, withEmail, sentToday, activeCampaigns, leadsCount] = await Promise.all([
-        count("companies?select=id"),
+      const [totalCompanies, withPhone, withWhatsapp, withEmail, sentToday, activeCampaigns, leadsCount, totalContacts] = await Promise.all([
+        count("companies?select=id&deleted_at=is.null"),
         count("contact_methods?select=id&type=eq.phone"),
         count("contact_methods?select=id&type=eq.whatsapp"),
         count("contact_methods?select=id&type=eq.email"),
-        count(`outbound_messages?select=id&status=eq.sent&sent_at=gte.${new Date().toISOString().slice(0,10)}`),
+        count(`outbound_messages?select=id&status=eq.sent&sent_at=gte.${todayStr}`),
         count("campaigns?select=id&status=eq.active"),
         count("leads?select=id"),
+        count("contacts?select=id"),
       ]);
-      setFunnel({ totalCompanies, withPhone, withWhatsapp, withEmail, sentToday, activeCampaigns, leadsCount });
+      let marketplaceListings = 0;
+      try { marketplaceListings = await count("market_requests?select=id"); } catch(e) {}
+
+      // BUGÜN — sadece gerçek activity_log kayıtlarından, sahte veri yok.
+      const [waSentToday, mailSentToday, repliedToday, companyToday, contactToday, leadToday, wonToday] = await Promise.all([
+        count(`activity_log?select=id&action=eq.whatsapp_sent&occurred_at=gte.${todayStartIso}`),
+        count(`activity_log?select=id&action=eq.email_sent&occurred_at=gte.${todayStartIso}`),
+        count(`activity_log?select=id&action=eq.replied&occurred_at=gte.${todayStartIso}`),
+        count(`activity_log?select=id&action=eq.company_created&occurred_at=gte.${todayStartIso}`),
+        count(`activity_log?select=id&action=eq.contact_created&occurred_at=gte.${todayStartIso}`),
+        count(`activity_log?select=id&action=eq.lead_created&occurred_at=gte.${todayStartIso}`),
+        count(`activity_log?select=id&action=eq.lead_stage_changed&result=eq.Kazanıldı&occurred_at=gte.${todayStartIso}`),
+      ]);
+      const followupRes = await fetch(`${SUPABASE_URL}/rest/v1/contacts?followup_date=eq.${todayStr}&select=id,person_name,status,company_id,companies(name_original)`, { headers: authHeaders(token) });
+      const followupData = followupRes.ok ? await followupRes.json() : [];
+
+      setFunnel({ totalCompanies, withPhone, withWhatsapp, withEmail, sentToday, activeCampaigns, leadsCount, totalContacts, marketplaceListings });
+      setToday_({ waSentToday, mailSentToday, repliedToday, companyToday, contactToday, leadToday, wonToday, followupCount: followupData.length });
+      setFollowupsToday(followupData);
+
+      // PERFORMANS — kampanya bazlı gönderim/cevap (kampanya sayısı küçük olduğu için tek tek sorgulanabilir)
+      const campRes = await fetch(`${SUPABASE_URL}/rest/v1/campaigns?select=id,name,channel&order=id.desc&limit=20`, { headers: authHeaders(token) });
+      const campList = campRes.ok ? await campRes.json() : [];
+      const campPerf = await Promise.all(campList.map(async c => {
+        const sent = await count(`outbound_messages?select=id,campaign_targets!inner(campaign_id)&status=eq.sent&campaign_targets.campaign_id=eq.${c.id}`);
+        const replied = await count(`activity_log?select=id&action=eq.replied&campaign_id=eq.${c.id}`);
+        return { ...c, sent, replied };
+      }));
+      setPerf({ campaigns: campPerf.filter(c => c.sent > 0 || c.replied > 0) });
     })();
   }, []);
 
@@ -508,18 +554,42 @@ function CommandCenter({ leads, setActive, loadLeads }) {
         ))}
       </div>
 
+      {today_ && (
+        <div style={cardSt({padding:20,marginBottom:20})}>
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🟢 BUGÜN</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+            {[
+              {l:"WHATSAPP GÖNDERİLEN",v:today_.waSentToday},
+              {l:"E-POSTA GÖNDERİLEN",v:today_.mailSentToday},
+              {l:"GELEN CEVAP",v:today_.repliedToday},
+              {l:"YENİ FİRMA",v:today_.companyToday},
+              {l:"YENİ KİŞİ",v:today_.contactToday},
+              {l:"YENİ LEAD",v:today_.leadToday},
+              {l:"TAKİP EDİLECEK",v:today_.followupCount},
+              {l:"KAZANILAN",v:today_.wonToday},
+            ].map(k=>(
+              <div key={k.l} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
+                <div style={{fontSize:17,fontWeight:800,color:C.ghost}}>{k.v}</div>
+                <div style={{fontSize:9,color:C.smoke,marginTop:3}}>{k.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {funnel && (
         <div style={cardSt({padding:20,marginBottom:20})}>
-          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>📊 VERİTABANI DURUMU &amp; FUNNEL</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:10}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>📊 TOPLAM</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(8,1fr)",gap:10}}>
             {[
               {l:"FİRMA",v:funnel.totalCompanies},
+              {l:"KİŞİ",v:funnel.totalContacts},
               {l:"TELEFONLU",v:funnel.withPhone},
               {l:"WHATSAPP'LI",v:funnel.withWhatsapp},
               {l:"E-POSTALI",v:funnel.withEmail},
-              {l:"BUGÜN GÖNDERİLEN",v:funnel.sentToday},
-              {l:"AKTİF KAMPANYA",v:funnel.activeCampaigns},
               {l:"LEAD",v:funnel.leadsCount},
+              {l:"AKTİF KAMPANYA",v:funnel.activeCampaigns},
+              {l:"MARKETPLACE İLANI",v:funnel.marketplaceListings},
             ].map(k=>(
               <div key={k.l} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
                 <div style={{fontSize:17,fontWeight:800,color:C.ghost}}>{k.v}</div>
@@ -532,34 +602,48 @@ function CommandCenter({ leads, setActive, loadLeads }) {
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
         <div style={cardSt({padding:20})}>
-          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🟢 BUGÜNKÜ GÖREVLER</div>
-          {[
-            {text:`${leads.filter(l=>l.stage==="Lead").length} yeni lead aranacak`,icon:"📞",c:C.blue},
-            {text:`${hotLeads.length} sıcak fırsat takip edilecek`,icon:"🔥",c:C.orange},
-            {text:`0 teklif hazırlanacak`,icon:"📄",c:C.amber},
-            {text:`Stok kontrol edilecek`,icon:"⚠️",c:C.rust},
-          ].map((t,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
-              <span>{t.icon}</span><span style={{fontSize:13,flex:1}}>{t.text}</span>
-              <span style={{width:7,height:7,borderRadius:"50%",background:t.c}}/>
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>📅 BUGÜN TAKİP EDİLECEKLER</div>
+          {followupsToday.length===0 && <div style={{fontSize:13,color:C.smoke}}>Bugün için planlanmış takip yok.</div>}
+          {followupsToday.map(f=>(
+            <div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
+              <span>📌</span><span style={{fontSize:13,flex:1}}>{f.companies?.name_original || f.person_name || "—"} · {f.status}</span>
             </div>
           ))}
         </div>
         <div style={cardSt({padding:20})}>
-          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🤖 AI MARKET ALERTS</div>
-          {[
-            {text:"Suudi Arabistan'da yeni maden ihalesi açıldı",flag:"🇸🇦"},
-            {text:"Kazakistan'dan 30 gündür cevap yok",flag:"🇰🇿"},
-            {text:"Gana'daki Tarkwa Gold — büyük proje",flag:"🇬🇭"},
-            {text:"Irak'ta hafriyat büyüme trendi devam ediyor",flag:"🇮🇶"},
-          ].map((a,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
-              <span style={{fontSize:18}}>{a.flag}</span><span style={{fontSize:12,flex:1,lineHeight:1.4}}>{a.text}</span>
-            </div>
-          ))}
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>🤖 AI SABAH BRİFİNGİ</div>
+          <div style={{fontSize:12,color:C.smoke,marginBottom:10,lineHeight:1.5}}>Gerçek lead verilerine göre AI'dan kısa bir özet iste (bakiye gerektirir).</div>
           <button onClick={getAIBriefing} disabled={briefingLoading} style={{...bs(C.blueDim,C.blue,{border:`1px solid ${C.blue}33`,width:"100%",marginTop:4,fontSize:12})}}>
             {briefingLoading?"⏳ Hazırlanıyor...":"📋 AI Sabah Brifing'i Al"}
           </button>
+        </div>
+      </div>
+
+      {perf?.campaigns?.length > 0 && (
+        <div style={cardSt({padding:20,marginBottom:20})}>
+          <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>📈 PERFORMANS — KAMPANYA BAZLI</div>
+          {perf.campaigns.map(c=>(
+            <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:C.panel,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:8}}>
+              <span style={{fontSize:13,fontWeight:700}}>{c.name} <span style={{color:C.smoke,fontWeight:400}}>({c.channel})</span></span>
+              <span style={{fontSize:12,color:C.smoke}}>{c.sent} gönderildi · {c.replied} cevap {c.sent>0?`(%${Math.round(c.replied/c.sent*100)})`:""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={cardSt({padding:20,marginBottom:20})}>
+        <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:14}}>📈 PERFORMANS — LEAD DÖNÜŞÜMÜ</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10}}>
+          {STAGES.map(s=>(
+            <div key={s} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 8px",textAlign:"center"}}>
+              <div style={{fontSize:17,fontWeight:800,color:SC[s]}}>{leads.filter(l=>l.stage===s).length}</div>
+              <div style={{fontSize:9,color:C.smoke,marginTop:3}}>{s.toUpperCase()}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:11,color:C.smoke,marginTop:10}}>
+          Toplam {leads.length} lead içinde dönüşüm: %{leads.length?Math.round(leads.filter(l=>l.stage==="Kazanıldı").length/leads.length*100):0} kazanıldı.
+          Teklif dönüşümü: Teklif Merkezi henüz aktif değil, veri yok.
         </div>
       </div>
 
@@ -1867,6 +1951,8 @@ function ImportCenter({ user }) {
           if (!conRes.ok) throw new Error(JSON.stringify(conData));
           contactId = conData[0].id;
           stats.newCount++;
+          await writeActivity(token, user, { company_id: companyId, contact_id: contactId, action: "company_created", channel: "import" });
+          if (contactId) await writeActivity(token, user, { company_id: companyId, contact_id: contactId, action: "contact_created", channel: "import" });
         }
 
         if (pn) await tryInsertMethod(companyId, contactId, "phone", row.phone, pn, true);
