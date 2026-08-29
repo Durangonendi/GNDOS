@@ -1408,38 +1408,79 @@ const ACTIVITY_ACTION_LABEL = {
   listing_approved: "İlan onaylandı", listing_rejected: "İlan reddedildi", listing_pending: "İlan beklemeye alındı",
 };
 
+const ACTIVITY_PAGE_SIZE = 50;
 function GlobalActivity() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [actionFilter, setActionFilter] = useState("");
+  const [channelFilter, setChannelFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState("7"); // gun sayisi, "" = tumu
+
+  function buildUrl(offset) {
+    let url = `${SUPABASE_URL}/rest/v1/activity_log?select=*,companies(name_original)&order=occurred_at.desc`;
+    if (actionFilter) url += `&action=eq.${actionFilter}`;
+    if (channelFilter) url += `&channel=eq.${channelFilter}`;
+    if (dateFilter) {
+      const since = new Date(Date.now() - Number(dateFilter) * 86400000).toISOString();
+      url += `&occurred_at=gte.${since}`;
+    }
+    return url;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
     const token = await authToken();
     if (!token) { setLoading(false); return; }
-    let url = `${SUPABASE_URL}/rest/v1/activity_log?select=*,companies(name_original)&order=occurred_at.desc&limit=200`;
-    if (actionFilter) url += `&action=eq.${actionFilter}`;
-    const res = await fetch(url, { headers: authHeaders(token) });
-    setRows(res.ok ? await res.json() : []);
+    const res = await fetch(buildUrl(0), { headers: { ...authHeaders(token), Range: `0-${ACTIVITY_PAGE_SIZE - 1}` } });
+    const data = res.ok ? await res.json() : [];
+    setRows(data);
+    setHasMore(data.length === ACTIVITY_PAGE_SIZE);
     setLoading(false);
-  }, [actionFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionFilter, channelFilter, dateFilter]);
   useEffect(() => { load(); }, [load]);
+
+  async function loadMore() {
+    setLoadingMore(true);
+    const token = await authToken();
+    const res = await fetch(buildUrl(rows.length), { headers: { ...authHeaders(token), Range: `${rows.length}-${rows.length + ACTIVITY_PAGE_SIZE - 1}` } });
+    const data = res.ok ? await res.json() : [];
+    setRows(prev => [...prev, ...data]);
+    setHasMore(data.length === ACTIVITY_PAGE_SIZE);
+    setLoadingMore(false);
+  }
 
   return (
     <div>
       <div style={cardSt({ padding: 20, marginBottom: 16 })}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 12 }}>🕓 Sistem Aktivite Akışı</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select style={{ ...inpStyle, width: 130, cursor: "pointer" }} value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
+            <option value="1">Bugün</option>
+            <option value="7">Son 7 gün</option>
+            <option value="30">Son 30 gün</option>
+            <option value="">Tümü</option>
+          </select>
           <select style={{ ...inpStyle, width: 220, cursor: "pointer" }} value={actionFilter} onChange={e => setActionFilter(e.target.value)}>
             <option value="">Tüm işlem türleri</option>
             {Object.entries(ACTIVITY_ACTION_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <select style={{ ...inpStyle, width: 150, cursor: "pointer" }} value={channelFilter} onChange={e => setChannelFilter(e.target.value)}>
+            <option value="">Tüm kanallar</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">E-posta</option>
+            <option value="import">Import</option>
+            <option value="marketplace">Marketplace</option>
+            <option value="manual">Manuel</option>
           </select>
           <button onClick={load} style={ob(C.blue)}>🔄 Yenile</button>
         </div>
       </div>
       <div style={cardSt({ padding: 20 })}>
         {loading && <div style={{ color: C.smoke }}>⏳ Yükleniyor...</div>}
-        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Kayıt yok.</div>}
+        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Bu filtrede kayıt yok.</div>}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {rows.map(a => (
             <div key={a.id} style={{ display: "flex", gap: 10, padding: "9px 12px", background: C.panel, borderRadius: 6, border: `1px solid ${C.border}`, alignItems: "center" }}>
@@ -1448,6 +1489,9 @@ function GlobalActivity() {
             </div>
           ))}
         </div>
+        {!loading && hasMore && (
+          <button onClick={loadMore} disabled={loadingMore} style={{ ...ob(C.blue), marginTop: 12 }}>{loadingMore ? "⏳ Yükleniyor..." : "Daha fazla yükle"}</button>
+        )}
       </div>
     </div>
   );
