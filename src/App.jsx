@@ -1321,57 +1321,258 @@ function CompanyDetail({ companyId, onClose, user }) {
   );
 }
 
+// PostgREST 'in.()' filtreleri icin id listesini guvenli parcalara boler.
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 function CompaniesModul({ user }) {
   const [rowsData, setRowsData] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
+  const [fCountry, setFCountry] = useState("");
+  const [fSector, setFSector] = useState("");
+  const [fHasWhatsapp, setFHasWhatsapp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [detailId, setDetailId] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [campaigns, setCampaigns] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  function buildFilterQuery() {
+    let f = "&deleted_at=is.null";
+    if (search.trim()) f += `&name_searchable=ilike.*${encodeURIComponent(nameSearchable(search))}*`;
+    if (fCountry) f += `&country=eq.${encodeURIComponent(fCountry)}`;
+    if (fSector) f += `&sector=eq.${encodeURIComponent(fSector)}`;
+    return f;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
     const token = await authToken();
     if (!token) { setLoading(false); return; }
     const from = page * PAGE_SIZE, to = from + PAGE_SIZE - 1;
-    let url = `${SUPABASE_URL}/rest/v1/companies?select=id,name_original,country,sector,verification_status&order=id.desc`;
-    if (search.trim()) url += `&name_searchable=ilike.*${encodeURIComponent(nameSearchable(search))}*`;
+    let url = `${SUPABASE_URL}/rest/v1/companies?select=id,name_original,country,sector,verification_status,tags${fHasWhatsapp ? ",contact_methods!inner(type)" : ""}&order=id.desc${buildFilterQuery()}`;
+    if (fHasWhatsapp) url += "&contact_methods.type=eq.whatsapp";
     const res = await fetch(url, { headers: { ...authHeaders(token), Range: `${from}-${to}`, Prefer: "count=exact" } });
     const data = await res.json();
     const range = res.headers.get("Content-Range");
     setTotal(range ? Number(range.split("/")[1]) : data.length);
     setRowsData(data);
     setLoading(false);
-  }, [page, search]);
+  }, [page, search, fCountry, fSector, fHasWhatsapp]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setSelected(new Set()); }, [search, fCountry, fSector, fHasWhatsapp]);
+  useEffect(() => {
+    (async () => {
+      const token = await authToken();
+      if (!token) return;
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/campaigns?select=id,name,channel&order=id.desc`, { headers: authHeaders(token) });
+      setCampaigns(r.ok ? await r.json() : []);
+    })();
+  }, []);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  function toggleOne(id) {
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+  function togglePage() {
+    const pageIds = rowsData.map(r => r.id);
+    const allSelected = pageIds.every(id => selected.has(id));
+    setSelected(prev => {
+      const n = new Set(prev);
+      pageIds.forEach(id => allSelected ? n.delete(id) : n.add(id));
+      return n;
+    });
+  }
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    const token = await authToken();
+    const ids = [];
+    let offset = 0;
+    while (true) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/companies?select=id${fHasWhatsapp ? ",contact_methods!inner(type)" : ""}${fHasWhatsapp ? "&contact_methods.type=eq.whatsapp" : ""}${buildFilterQuery()}&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
+      const d = await r.json();
+      if (!Array.isArray(d) || d.length === 0) break;
+      d.forEach(x => ids.push(x.id));
+      if (d.length < 1000) break;
+      offset += 1000;
+    }
+    setSelected(new Set(ids));
+    setSelectingAll(false);
+  }
+
+  async function bulkPatch(fields) {
+    setBulkBusy(true);
+    const token = await authToken();
+    for (const group of chunk([...selected], 300)) {
+      await fetch(`${SUPABASE_URL}/rest/v1/companies?id=in.(${group.join(",")})`, {
+        method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+        body: JSON.stringify(fields),
+      });
+    }
+    setBulkBusy(false);
+    load();
+  }
+
+  async function bulkArchive() {
+    if (!window.confirm(`${selected.size} firmayı arşivlemek istediğine emin misin? (Geri alınabilir, veri silinmez)`)) return;
+    await bulkPatch({ deleted_at: new Date().toISOString() });
+    setSelected(new Set());
+  }
+
+  async function bulkSetField(field, label) {
+    const value = prompt(`Yeni ${label}:`);
+    if (value === null) return;
+    await bulkPatch({ [field]: value });
+  }
+
+  async function bulkTag(mode) {
+    const tag = prompt(mode === "add" ? "Eklenecek etiket:" : "Kaldırılacak etiket:");
+    if (!tag) return;
+    setBulkBusy(true);
+    const token = await authToken();
+    const ids = [...selected];
+    for (const group of chunk(ids, 50)) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/companies?id=in.(${group.join(",")})&select=id,tags`, { headers: authHeaders(token) });
+      const rowsWithTags = r.ok ? await r.json() : [];
+      await Promise.all(rowsWithTags.map(row => {
+        const current = Array.isArray(row.tags) ? row.tags : [];
+        const next = mode === "add" ? [...new Set([...current, tag])] : current.filter(t => t !== tag);
+        return fetch(`${SUPABASE_URL}/rest/v1/companies?id=eq.${row.id}`, {
+          method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+          body: JSON.stringify({ tags: next }),
+        });
+      }));
+    }
+    setBulkBusy(false);
+    load();
+  }
+
+  async function bulkAddToCampaign() {
+    if (!campaigns.length) { alert("Önce bir kampanya oluştur."); return; }
+    const names = campaigns.map((c,i) => `${i+1}) ${c.name} (${c.channel})`).join("\n");
+    const pick = prompt("Hangi kampanyaya eklensin? Numara yaz:\n" + names);
+    const campaign = campaigns[Number(pick) - 1];
+    if (!campaign) return;
+    setBulkBusy(true);
+    const token = await authToken();
+    const ids = [...selected];
+    let added = 0;
+    for (const group of chunk(ids, 100)) {
+      const mRes = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?company_id=in.(${group.join(",")})&type=eq.${campaign.channel}&select=id,company_id`, { headers: authHeaders(token) });
+      const methods = mRes.ok ? await mRes.json() : [];
+      for (const m of methods) {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/campaign_targets`, {
+          method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation,resolution=ignore-duplicates" },
+          body: JSON.stringify({ campaign_id: campaign.id, contact_method_id: m.id, company_id: m.company_id }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          const target = data[0];
+          if (target) {
+            await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages`, {
+              method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal,resolution=ignore-duplicates" },
+              body: JSON.stringify({ campaign_target_id: target.id, contact_method_id: m.id, channel: campaign.channel, idempotency_key: `ct_${target.id}_initial`, status: "queued" }),
+            });
+            added++;
+          }
+        }
+      }
+    }
+    setBulkBusy(false);
+    alert(`${added} hedef "${campaign.name}" kampanyasına eklendi.`);
+  }
+
+  async function bulkFollowup() {
+    const d = prompt("Takip tarihi (YYYY-AA-GG):", new Date(Date.now()+86400000).toISOString().slice(0,10));
+    if (!d) return;
+    setBulkBusy(true);
+    const token = await authToken();
+    for (const group of chunk([...selected], 300)) {
+      await fetch(`${SUPABASE_URL}/rest/v1/contacts?company_id=in.(${group.join(",")})`, {
+        method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+        body: JSON.stringify({ followup_date: d }),
+      });
+    }
+    setBulkBusy(false);
+    alert("Takip tarihi eklendi.");
+  }
+
+  async function bulkExport() {
+    setBulkBusy(true);
+    const token = await authToken();
+    const all = [];
+    for (const group of chunk([...selected], 300)) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/companies?id=in.(${group.join(",")})&select=id,name_original,country,city,region,sector,website,address,verification_status,tags`, { headers: authHeaders(token) });
+      if (r.ok) all.push(...await r.json());
+    }
+    downloadCsv("firmalar.csv", all);
+    setBulkBusy(false);
+  }
 
   return (
     <div>
       <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
-        <input style={{...inpStyle,width:280,fontSize:15}} placeholder="🔍 Firma adı yaz ve ara..." value={search}
+        <input style={{...inpStyle,width:220,fontSize:14}} placeholder="🔍 Firma adı ara..." value={search}
           onChange={e=>{setSearch(e.target.value); setPage(0);}}/>
+        <input style={{...inpStyle,width:130,fontSize:13}} placeholder="Ülke" value={fCountry} onChange={e=>{setFCountry(e.target.value); setPage(0);}}/>
+        <select style={{...inpStyle,width:150,fontSize:13,cursor:"pointer"}} value={fSector} onChange={e=>{setFSector(e.target.value); setPage(0);}}>
+          <option value="">Tüm sektörler</option>
+          {SECTORS.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.smoke,cursor:"pointer"}}>
+          <input type="checkbox" checked={fHasWhatsapp} onChange={e=>{setFHasWhatsapp(e.target.checked); setPage(0);}}/> WhatsApp mevcut
+        </label>
         <span style={{fontSize:12,color:C.smoke}}>{total} firma · sayfa {page+1}/{pageCount}</span>
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
           <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={bs(page===0?C.border:C.amber,page===0?C.smoke:C.onAccent,{opacity:page===0?0.5:1,cursor:page===0?"default":"pointer"})}>← Önceki 30</button>
           <button onClick={()=>setPage(p=>Math.min(pageCount-1,p+1))} disabled={page>=pageCount-1} style={bs(page>=pageCount-1?C.border:C.amber,page>=pageCount-1?C.smoke:C.onAccent,{opacity:page>=pageCount-1?0.5:1,cursor:page>=pageCount-1?"default":"pointer"})}>Sonraki 30 →</button>
         </div>
       </div>
+
+      {selected.size > 0 && (
+        <div style={{...cardSt({padding:14,marginBottom:14,border:`1px solid ${C.amber}44`,background:C.amberDim}),display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <b style={{fontSize:13}}>{selected.size} firma seçili</b>
+          <button onClick={bulkAddToCampaign} disabled={bulkBusy} style={ob(C.blue)}>📣 Kampanyaya Ekle</button>
+          <button onClick={()=>bulkTag("add")} disabled={bulkBusy} style={ob(C.green)}>🏷 Etiket Ekle</button>
+          <button onClick={()=>bulkTag("remove")} disabled={bulkBusy} style={ob(C.smoke)}>🏷 Etiket Kaldır</button>
+          <button onClick={()=>bulkSetField("country","ülke")} disabled={bulkBusy} style={ob(C.smoke)}>🌍 Ülke Değiştir</button>
+          <button onClick={()=>bulkSetField("sector","sektör")} disabled={bulkBusy} style={ob(C.smoke)}>🏗 Sektör Değiştir</button>
+          <button onClick={()=>bulkSetField("verification_status","durum")} disabled={bulkBusy} style={ob(C.smoke)}>✓ Durum Değiştir</button>
+          <button onClick={bulkFollowup} disabled={bulkBusy} style={ob(C.amber)}>📅 Takibe Ekle</button>
+          <button onClick={bulkExport} disabled={bulkBusy} style={ob(C.blue)}>⬇ Dışa Aktar</button>
+          <button onClick={bulkArchive} disabled={bulkBusy} style={ob(C.rust)}>🗄 Arşivle</button>
+          <button onClick={()=>setSelected(new Set())} style={ob(C.smoke)}>✕ Seçimi Temizle</button>
+        </div>
+      )}
+
       {loading ? <div style={{color:C.smoke,padding:20}}>Yükleniyor...</div> : (
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-            <thead><tr>{["FİRMA","ÜLKE","SEKTÖR","DURUM"].map(h=><th key={h} style={{background:C.panel,color:C.smoke,padding:"9px 12px",textAlign:"left",fontSize:11,borderBottom:`1px solid ${C.border}`}}>{h}</th>)}</tr></thead>
+            <thead><tr>
+              <th style={{background:C.panel,padding:"9px 12px",borderBottom:`1px solid ${C.border}`}}><input type="checkbox" checked={rowsData.length>0 && rowsData.every(r=>selected.has(r.id))} onChange={togglePage}/></th>
+              {["FİRMA","ÜLKE","SEKTÖR","DURUM"].map(h=><th key={h} style={{background:C.panel,color:C.smoke,padding:"9px 12px",textAlign:"left",fontSize:11,borderBottom:`1px solid ${C.border}`}}>{h}</th>)}
+            </tr></thead>
             <tbody>{rowsData.map(r=>(
-              <tr key={r.id} onClick={()=>setDetailId(r.id)} style={{cursor:"pointer"}}>
-                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:700}}>{r.name_original}</td>
-                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}}>{r.country}</td>
-                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}}>{r.sector}</td>
-                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`}}><span style={pill(r.verification_status==="verified"?C.green:C.smoke)}>{r.verification_status}</span></td>
+              <tr key={r.id} style={{cursor:"pointer",background:selected.has(r.id)?C.amberDim:"transparent"}}>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={selected.has(r.id)} onChange={()=>toggleOne(r.id)}/></td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:700}} onClick={()=>setDetailId(r.id)}>{r.name_original}{r.tags?.length>0 && <span style={{marginLeft:6}}>{r.tags.map(t=><span key={t} style={{...pill(C.blue),marginRight:4,fontSize:10}}>{t}</span>)}</span>}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}} onClick={()=>setDetailId(r.id)}>{r.country}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`,color:C.smoke}} onClick={()=>setDetailId(r.id)}>{r.sector}</td>
+                <td style={{padding:"9px 12px",borderBottom:`1px solid ${C.border}`}} onClick={()=>setDetailId(r.id)}><span style={pill(r.verification_status==="verified"?C.green:C.smoke)}>{r.verification_status}</span></td>
               </tr>
             ))}</tbody>
           </table>
+          <div style={{padding:"10px 4px"}}>
+            <button onClick={selectAllMatching} disabled={selectingAll} style={ob(C.blue)}>{selectingAll?"⏳ Sayılıyor...":`Filtreye uyan TÜMÜNÜ seç (${total})`}</button>
+          </div>
         </div>
       )}
       {detailId && <CompanyDetail companyId={detailId} onClose={()=>setDetailId(null)} user={user}/>}
