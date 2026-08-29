@@ -293,7 +293,6 @@ const PRIMARY_MODULES = [
 ];
 // Henuz aktif olmayan/ikincil modeuller — silinmedi, "Diger" altina tasindi.
 const SECONDARY_MODULES = [
-  {key:"fbtest",icon:"📱",label:"FB Grup Deneyi"},
   {key:"makine",icon:"🏗️",label:"Equipment Center"},
   {key:"stok",icon:"📦",label:"Inventory"},
   {key:"finans",icon:"💰",label:"Finance"},
@@ -2722,112 +2721,6 @@ function AICopilot({ leads }) {
   );
 }
 
-// ─── FB GRUP DENEYİ (120 grup/gün "kontrol" vs az-ama-kaliteli "test") ────────
-// Basit gunluk agregat kayit: tarih + bucket + grup sayisi + toplam
-// goruntulenme. Grup isimlerini tek tek girmeye gerek yok — sorulan soru
-// "hacim mi kalite mi kazaniyor" oldugu icin gunluk toplam yeterli.
-function FbExperiment() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [logDate, setLogDate] = useState(today());
-  const [bucket, setBucket] = useState("control");
-  const [groupCount, setGroupCount] = useState("");
-  const [totalViews, setTotalViews] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState(null);
-
-  const loadRows = useCallback(async () => {
-    setLoading(true);
-    const token = await authToken();
-    if (!token) { setLoading(false); return; }
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/fb_experiment_days?select=*&order=log_date.desc&limit=60`,
-      { headers: authHeaders(token) }
-    );
-    const data = await res.json();
-    setRows(Array.isArray(data) ? data : []);
-    setLoading(false);
-  }, []);
-  useEffect(() => { loadRows(); }, [loadRows]);
-
-  async function saveRow() {
-    if (!groupCount || !totalViews) return;
-    setSaving(true);
-    setSaveMsg(null);
-    const token = await authToken();
-    if (!token) { setSaving(false); return; }
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/fb_experiment_days?on_conflict=log_date,bucket`, {
-      method: "POST",
-      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify({ log_date: logDate, bucket, group_count: Number(groupCount), total_views: Number(totalViews) }),
-    });
-    if (res.ok) { setSaveMsg("ok"); setGroupCount(""); setTotalViews(""); loadRows(); }
-    else setSaveMsg("error");
-    setSaving(false);
-  }
-
-  const totals = useMemo(() => {
-    const t = { control: { count: 0, views: 0, days: 0 }, test: { count: 0, views: 0, days: 0 } };
-    for (const r of rows) {
-      if (r.bucket !== "control" && r.bucket !== "test") continue;
-      t[r.bucket].count += r.group_count || 0;
-      t[r.bucket].views += r.total_views || 0;
-      t[r.bucket].days += 1;
-    }
-    return t;
-  }, [rows]);
-
-  const avg = (b) => (totals[b].count ? (totals[b].views / totals[b].count).toFixed(0) : "—");
-
-  return (
-    <div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-        <div style={cardSt({ padding: 20 })}>
-          <div style={{ fontSize: 12, color: C.smoke, marginBottom: 4 }}>KONTROL — 120 grup, tek metin</div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: C.ghost }}>{totals.control.views.toLocaleString("tr-TR")}</div>
-          <div style={{ fontSize: 12, color: C.muted }}>{totals.control.days} gün · ortalama {avg("control")} görüntülenme/grup</div>
-        </div>
-        <div style={cardSt({ padding: 20 })}>
-          <div style={{ fontSize: 12, color: C.smoke, marginBottom: 4 }}>TEST — az grup, varyasyonlu içerik</div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: C.green }}>{totals.test.views.toLocaleString("tr-TR")}</div>
-          <div style={{ fontSize: 12, color: C.muted }}>{totals.test.days} gün · ortalama {avg("test")} görüntülenme/grup</div>
-        </div>
-      </div>
-
-      <div style={cardSt({ padding: 24, marginBottom: 20 })}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>📤 Bugünü Kaydet (10 saniye)</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-          <div><label style={{ fontSize: 11, color: C.smoke }}>TARİH</label><input type="date" style={inpStyle} value={logDate} onChange={e => setLogDate(e.target.value)} /></div>
-          <div><label style={{ fontSize: 11, color: C.smoke }}>GRUP</label>
-            <select style={{ ...inpStyle, cursor: "pointer" }} value={bucket} onChange={e => setBucket(e.target.value)}>
-              <option value="control">Kontrol (120 grup)</option>
-              <option value="test">Test (kaliteli/az grup)</option>
-            </select>
-          </div>
-          <div><label style={{ fontSize: 11, color: C.smoke }}>KAÇ GRUBA ATTIN</label><input type="number" style={inpStyle} value={groupCount} onChange={e => setGroupCount(e.target.value)} placeholder="Örn: 120" /></div>
-          <div><label style={{ fontSize: 11, color: C.smoke }}>TOPLAM GÖRÜNTÜLENME</label><input type="number" style={inpStyle} value={totalViews} onChange={e => setTotalViews(e.target.value)} placeholder="Örn: 3200" /></div>
-        </div>
-        <button onClick={saveRow} disabled={saving || !groupCount || !totalViews} style={{ ...bs(C.amber, C.onAccent), opacity: saving ? 0.7 : 1 }}>
-          {saving ? "⏳ Kaydediliyor..." : "Kaydet"}
-        </button>
-        {saveMsg === "ok" && <div style={{ marginTop: 12, fontSize: 13, color: C.green }}>✅ Kaydedildi.</div>}
-        {saveMsg === "error" && <div style={{ marginTop: 12, fontSize: 13, color: C.rust }}>Kaydedilemedi, tekrar dene.</div>}
-      </div>
-
-      <div style={cardSt({ padding: 24 })}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>Günlük Kayıtlar</div>
-        {loading && <div style={{ color: C.smoke, fontSize: 13 }}>Yükleniyor...</div>}
-        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Henüz kayıt yok.</div>}
-        {rows.map(r => (
-          <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 8 }}>
-            <div style={{ fontSize: 13 }}><b>{r.log_date}</b> <span style={pill(r.bucket === "control" ? C.smoke : C.green)}>{r.bucket === "control" ? "Kontrol" : "Test"}</span></div>
-            <div style={{ fontSize: 13, color: C.smoke }}>{r.group_count} grup · <b style={{ color: C.ghost }}>{(r.total_views || 0).toLocaleString("tr-TR")}</b> görüntülenme</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function SimpleModule({title, content}) {
   return (
@@ -2917,7 +2810,6 @@ export default function GNDOS() {
         {active==="activity"&&<GlobalActivity/>}
         {active==="settings"&&<SettingsPanel user={user} onLogout={handleLogout}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
-        {active==="fbtest"&&<FbExperiment/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
         {active==="finans"&&<SimpleModule title="💰 Finance" content="Finans takibi yakında aktif olacak"/>}
