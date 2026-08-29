@@ -922,7 +922,7 @@ function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
     try {
       await marketRequestToLead(row, user, token);
       setConvertedIds(prev => [...prev, row.id]);
-    } catch (e) { alert("Lead oluşturulamadı: " + e.message); }
+    } catch (e) { console.error("Lead oluşturma hatası:", e); alert("Lead oluşturulamadı. Tekrar deneyin."); }
     setBusyId(null);
   }
 
@@ -1786,7 +1786,7 @@ function CampaignCenter() {
       }),
     });
     const cData = await cRes.json();
-    if (!cRes.ok) { setResult({ error: JSON.stringify(cData) }); setCreating(false); return; }
+    if (!cRes.ok) { console.error("Kampanya oluşturma hatası:", cData); setResult({ error: "İşlem tamamlanamadı. Tekrar deneyin." }); setCreating(false); return; }
     const campaignId = cData[0].id;
 
     let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,company_id,companies!inner(country,sector)&type=eq.${channel === "email" ? "email" : "whatsapp"}`;
@@ -2168,29 +2168,34 @@ function ImportCenter({ user }) {
         notes: String(get(r, "notes") || "").trim(),
       }));
 
-    // Var olan iletişim yöntemlerini (telefon/whatsapp/email) ve firma domain'lerini
-    // company_id ile birlikte çekip gerçek eşleşme haritası kur (dedup + güncelleme için).
+    // Var olan iletişim yöntemlerini/domain'leri SADECE bu dosyadaki değerler
+    // için sorgula (tüm contact_methods tablosunu çekmek 100.000+ kayıtta
+    // tarayıcıyı ve ağı tıkar — bu yüzden hedefli in.() sorgusu kullanılıyor).
     const token = await authToken();
     const methodMap = new Map(); // value_normalized -> {company_id, contact_id}
     const domainMap = new Map(); // website_domain -> company_id
     if (token) {
-      let offset = 0;
-      while (true) {
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?select=type,value_normalized,company_id,contact_id&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
+      const neededValues = new Set();
+      const neededDomains = new Set();
+      parsed.forEach(row => {
+        const pn = normalizePhone(row.phone, row.country);
+        const wn = normalizePhone(row.whatsapp, row.country);
+        const en = normalizeEmail(row.email);
+        const dn = normalizeDomain(row.website);
+        if (pn) neededValues.add(pn);
+        if (wn) neededValues.add(wn);
+        if (en) neededValues.add(en);
+        if (dn) neededDomains.add(dn);
+      });
+      for (const group of chunk([...neededValues], 200)) {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?select=value_normalized,company_id,contact_id&value_normalized=in.(${group.map(v => `"${v}"`).join(",")})`, { headers: authHeaders(token) });
         const d = await r.json();
-        if (!Array.isArray(d) || d.length === 0) break;
-        d.forEach(m => methodMap.set(m.value_normalized, { company_id: m.company_id, contact_id: m.contact_id }));
-        if (d.length < 1000) break;
-        offset += 1000;
+        if (Array.isArray(d)) d.forEach(m => methodMap.set(m.value_normalized, { company_id: m.company_id, contact_id: m.contact_id }));
       }
-      offset = 0;
-      while (true) {
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/companies?select=id,website_domain&website_domain=not.is.null&limit=1000&offset=${offset}`, { headers: authHeaders(token) });
+      for (const group of chunk([...neededDomains], 200)) {
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/companies?select=id,website_domain&website_domain=in.(${group.map(v => `"${v}"`).join(",")})`, { headers: authHeaders(token) });
         const d = await r.json();
-        if (!Array.isArray(d) || d.length === 0) break;
-        d.forEach(c => { if (c.website_domain) domainMap.set(c.website_domain, c.id); });
-        if (d.length < 1000) break;
-        offset += 1000;
+        if (Array.isArray(d)) d.forEach(c => { if (c.website_domain) domainMap.set(c.website_domain, c.id); });
       }
     }
 
@@ -2236,11 +2241,12 @@ function ImportCenter({ user }) {
     setImporting(true);
     setProgress(0);
     const stats = { newCount: 0, updateCount: 0, dupeCount: 0, errorCount: 0, errorRows: [] };
+    let done = 0;
+    const bump = () => setProgress(++done);
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (row._status === "DUPLICATE") { stats.dupeCount++; setProgress(i + 1); continue; }
-      if (row._status === "HATALI") { stats.errorCount++; stats.errorRows.push({ satir: row._row, firma: row.company, telefon: row.phone, hata: row._reason }); setProgress(i + 1); continue; }
+    async function processRow(row) {
+      if (row._status === "DUPLICATE") { stats.dupeCount++; bump(); return; }
+      if (row._status === "HATALI") { stats.errorCount++; stats.errorRows.push({ satir: row._row, firma: row.company, telefon: row.phone, hata: row._reason }); bump(); return; }
 
       try {
         const token = await authToken();
@@ -2309,8 +2315,20 @@ function ImportCenter({ user }) {
         stats.errorCount++;
         stats.errorRows.push({ satir: row._row, firma: row.company, telefon: row.phone, hata: String(e.message || e).slice(0, 200) });
       }
-      setProgress(i + 1);
+      bump();
     }
+
+    // Buyuk dosyalarda (10.000+ satir) tamamen sirali islem cok yavas kalir;
+    // Supabase'i asiri yuklememek icin sinirli sayida (8) paralel worker kullanilir.
+    const CONCURRENCY = 8;
+    let cursor = 0;
+    async function worker() {
+      while (cursor < rows.length) {
+        const row = rows[cursor++];
+        await processRow(row);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
 
     const token = await authToken();
     if (token) {
