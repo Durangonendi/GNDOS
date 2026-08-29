@@ -1346,7 +1346,8 @@ function ContactsModul({ user }) {
     const token = await authToken();
     if (!token) { setLoading(false); return; }
     const from = page * PAGE_SIZE, to = from + PAGE_SIZE - 1;
-    let url = `${SUPABASE_URL}/rest/v1/contacts?select=id,person_name,role,status,last_contact_at,last_contact_channel,followup_date,company_id,companies(id,name_original,country),contact_methods(type,value_original)&order=id.desc`;
+    // companies!inner + deleted_at filtresi: arsivlenen firmalarin kisileri listede gorunmuyor.
+    let url = `${SUPABASE_URL}/rest/v1/contacts?select=id,person_name,role,status,last_contact_at,last_contact_channel,followup_date,company_id,companies!inner(id,name_original,country,deleted_at),contact_methods(type,value_original)&order=id.desc&companies.deleted_at=is.null`;
     if (statusFilter) url += `&status=eq.${encodeURIComponent(statusFilter)}`;
     if (search.trim()) url += `&or=(person_name.ilike.*${encodeURIComponent(search)}*,companies.name_searchable.ilike.*${encodeURIComponent(nameSearchable(search))}*)`;
     const res = await fetch(url, { headers: { ...authHeaders(token), Range: `${from}-${to}`, Prefer: "count=exact" } });
@@ -1805,7 +1806,8 @@ function CampaignCenter() {
     const token = await authToken();
     if (!token) { setMatching(false); return; }
     // contact_methods + companies join filtresi PostgREST embedded filter ile:
-    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,companies!inner(country,sector)&type=eq.${channel === "email" ? "email" : "whatsapp"}`;
+    // arsivlenen (deleted_at dolu) firmalar yeni kampanyalara dahil edilmiyor.
+    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,companies!inner(country,sector,deleted_at)&type=eq.${channel === "email" ? "email" : "whatsapp"}&companies.deleted_at=is.null`;
     if (fCountry) url += `&companies.country=eq.${encodeURIComponent(fCountry)}`;
     if (fSector) url += `&companies.sector=eq.${encodeURIComponent(fSector)}`;
     const res = await fetch(url, { headers: { ...authHeaders(token), Prefer: "count=exact", Range: "0-0" } });
@@ -1833,7 +1835,7 @@ function CampaignCenter() {
     if (!cRes.ok) { console.error("Kampanya oluşturma hatası:", cData); setResult({ error: "İşlem tamamlanamadı. Tekrar deneyin." }); setCreating(false); return; }
     const campaignId = cData[0].id;
 
-    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,company_id,companies!inner(country,sector)&type=eq.${channel === "email" ? "email" : "whatsapp"}`;
+    let url = `${SUPABASE_URL}/rest/v1/contact_methods?select=id,company_id,companies!inner(country,sector,deleted_at)&type=eq.${channel === "email" ? "email" : "whatsapp"}&companies.deleted_at=is.null`;
     if (fCountry) url += `&companies.country=eq.${encodeURIComponent(fCountry)}`;
     if (fSector) url += `&companies.sector=eq.${encodeURIComponent(fSector)}`;
     const mRes = await fetch(url, { headers: authHeaders(token) });
