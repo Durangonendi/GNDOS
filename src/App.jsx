@@ -83,6 +83,13 @@ const COUNTRY_DIAL_CODE = {
   "Zambia": "260", "Almanya": "49", "Polonya": "48", "Romanya": "40", "Sırbistan": "381",
   "Ukrayna": "380", "Kazakistan": "7", "Özbekistan": "998", "Türkmenistan": "993",
   "Azerbaycan": "994", "Pakistan": "92", "Hindistan": "91", "Bangladeş": "880",
+  // Global B2B lead listelerinde gorulen ulkeler (Ingilizce isimlerle de eslesin diye
+  // hem Turkce hem Ingilizce adlar eklendi):
+  "Australia": "61", "United States": "1", "South Africa": "27", "United Arab Emirates": "971",
+  "Canada": "1", "Netherlands": "31", "Germany": "49", "Saudi Arabia": "966", "India": "91",
+  "Mozambique": "258", "Malawi": "265", "Kenya": "254", "Eswatini": "268", "Zimbabwe": "263",
+  "United Kingdom": "44", "Poland": "48", "Nigeria": "234", "China": "86", "Mexico": "52",
+  "New Zealand": "64", "Uganda": "256",
 };
 // E.164'e olabildiğince yaklaştırır. countryHint verilirse (satırdaki "Ülke"
 // sütunu) ve numara zaten bir ülke koduyla başlamıyorsa o kodu ekler.
