@@ -202,14 +202,15 @@ async function dbDeleteLead(id, user) {
 }
 
 const C = {
-  bg:"#060D14", navy:"#0A1628", iron:"#0E1E2E", panel:"#0C1822",
-  card:"#101F30", amber:"#F0A500", amberDim:"#F0A50015",
+  bg:"#F4F6F8", navy:"#EDF1F4", iron:"#E4E9ED", panel:"#EBEFF2",
+  card:"#FFFFFF", amber:"#F0A500", amberDim:"#F0A50015",
   green:"#1DB954", greenDim:"#1DB95415",
   rust:"#E63946", rustDim:"#E6394615",
   blue:"#2196F3", blueDim:"#2196F315",
   orange:"#FF6B35",
-  ghost:"#E8EDF3", smoke:"#6B8299", muted:"#3A5068",
-  border:"#162030",
+  ghost:"#16222E", smoke:"#5B6B7A", muted:"#8996A2",
+  border:"#DCE2E7",
+  onAccent:"#12202E",
 };
 
 const SC = {
@@ -292,7 +293,7 @@ function LoginScreen({ onLogin }) {
           style={{...inpStyle,marginBottom:12,border:`1px solid ${error?C.rust:C.border}`}}
         />
         {error && <div style={{color:C.rust,fontSize:12,marginBottom:8}}>{error}</div>}
-        <button onClick={tryLogin} disabled={loading} style={{...bs(C.amber,C.navy),width:"100%",padding:11,fontSize:14,opacity:loading?0.7:1}}>{loading?"Giriş yapılıyor...":"Giriş Yap"}</button>
+        <button onClick={tryLogin} disabled={loading} style={{...bs(C.amber,C.onAccent),width:"100%",padding:11,fontSize:14,opacity:loading?0.7:1}}>{loading?"Giriş yapılıyor...":"Giriş Yap"}</button>
         <div style={{fontSize:11,color:C.muted,marginTop:16}}>Sadece yetkili erişim</div>
       </div>
     </div>
@@ -351,7 +352,7 @@ function LeadFormModal({ editLead, onClose, onSave }) {
         </div>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:20}}>
           <button onClick={onClose} style={ob(C.smoke)}>İptal</button>
-          <button onClick={handleSave} disabled={saving} style={bs(C.amber,C.navy,{opacity:saving?0.7:1})}>{saving?"⏳ Kaydediliyor...":"💾 Kaydet"}</button>
+          <button onClick={handleSave} disabled={saving} style={bs(C.amber,C.onAccent,{opacity:saving?0.7:1})}>{saving?"⏳ Kaydediliyor...":"💾 Kaydet"}</button>
         </div>
       </div>
     </div>
@@ -449,7 +450,7 @@ function CommandCenter({ leads, setActive, loadLeads }) {
           <div style={{fontSize:28,fontWeight:900,lineHeight:1.1}}>{greeting}, <span style={{color:C.amber}}>Duran</span></div>
           <div style={{fontSize:13,color:C.smoke,marginTop:4}}>{new Date().toLocaleDateString("tr-TR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</div>
         </div>
-        <button onClick={getPriorities} style={{background:`linear-gradient(135deg,${C.amber},#E08C00)`,color:C.navy,border:"none",borderRadius:10,padding:"14px 28px",cursor:"pointer",fontSize:15,fontWeight:900,boxShadow:`0 4px 24px ${C.amber}40`}}>
+        <button onClick={getPriorities} style={{background:`linear-gradient(135deg,${C.amber},#E08C00)`,color:C.onAccent,border:"none",borderRadius:10,padding:"14px 28px",cursor:"pointer",fontSize:15,fontWeight:900,boxShadow:`0 4px 24px ${C.amber}40`}}>
           🎯 Bugün Ne Yapmalıyım?
         </button>
       </div>
@@ -598,7 +599,7 @@ function FirmaBul({ onAdd }) {
     <div>
       <div style={{display:"flex",gap:10,marginBottom:20}}>
         {[["TR","🇹🇷 Türkiye"],["GLOBAL","🌍 Global"]].map(([k,v])=>(
-          <button key={k} onClick={()=>setMode(k)} style={bs(mode===k?C.amber:C.card,mode===k?C.navy:C.smoke,{border:`1px solid ${mode===k?C.amber:C.border}`})}>{v}</button>
+          <button key={k} onClick={()=>setMode(k)} style={bs(mode===k?C.amber:C.card,mode===k?C.onAccent:C.smoke,{border:`1px solid ${mode===k?C.amber:C.border}`})}>{v}</button>
         ))}
       </div>
       <div style={{display:"flex",gap:12,marginBottom:18,flexWrap:"wrap",alignItems:"flex-end"}}>
@@ -623,7 +624,7 @@ function FirmaBul({ onAdd }) {
           <label style={{fontSize:11,color:C.smoke}}>SEKTÖR</label>
           <select value={sektor} onChange={e=>setSektor(e.target.value)} style={{...inpStyle,cursor:"pointer"}}>{SECTORS.map(s=><option key={s}>{s}</option>)}</select>
         </div>
-        <button onClick={ara} disabled={loading} style={bs(C.amber,C.navy,{padding:"10px 24px",alignSelf:"flex-end",opacity:loading?0.7:1})}>{loading?"⏳ Aranıyor...":"🔍 Firma Ara"}</button>
+        <button onClick={ara} disabled={loading} style={bs(C.amber,C.onAccent,{padding:"10px 24px",alignSelf:"flex-end",opacity:loading?0.7:1})}>{loading?"⏳ Aranıyor...":"🔍 Firma Ara"}</button>
       </div>
       {error&&<div style={{color:C.rust,padding:12,background:C.rustDim,borderRadius:6,marginBottom:12}}>{error}</div>}
       {loading&&<div style={{textAlign:"center",padding:48,color:C.smoke}}><div style={{fontSize:36,marginBottom:8}}>⚙️</div><div>{mode==="TR"?il:ulke} · {sektor} aranıyor...</div></div>}
@@ -642,7 +643,7 @@ function FirmaBul({ onAdd }) {
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {f.whatsapp&&<a href={`https://wa.me/${(f.whatsapp||"").replace(/\D/g,"")}`} target="_blank" rel="noreferrer" style={{...ob("#25D366"),textDecoration:"none",textAlign:"center"}}>WA</a>}
-                <button onClick={()=>{onAdd({company:f.company,contact:f.contact||"",country:mode==="TR"?"Türkiye":ulke,region:mode==="TR"?"Türkiye":region,sector:sektor,productType:"Yeni Makine",product:"",value:0,stage:"Lead",whatsapp:f.whatsapp||f.phone||"",email:f.email||"",phone:f.phone||"",notes:f.notes||""});setAdded(a=>({...a,[i]:true}));}} disabled={added[i]} style={bs(added[i]?C.green+"33":C.amber,added[i]?C.green:C.navy,{border:added[i]?`1px solid ${C.green}`:"none"})}>{added[i]?"✓ Eklendi":"+ Ekle"}</button>
+                <button onClick={()=>{onAdd({company:f.company,contact:f.contact||"",country:mode==="TR"?"Türkiye":ulke,region:mode==="TR"?"Türkiye":region,sector:sektor,productType:"Yeni Makine",product:"",value:0,stage:"Lead",whatsapp:f.whatsapp||f.phone||"",email:f.email||"",phone:f.phone||"",notes:f.notes||""});setAdded(a=>({...a,[i]:true}));}} disabled={added[i]} style={bs(added[i]?C.green+"33":C.amber,added[i]?C.green:C.onAccent,{border:added[i]?`1px solid ${C.green}`:"none"})}>{added[i]?"✓ Eklendi":"+ Ekle"}</button>
               </div>
             </div>
           ))}
@@ -753,8 +754,8 @@ function CompaniesModul() {
           onChange={e=>{setSearch(e.target.value); setPage(0);}}/>
         <span style={{fontSize:12,color:C.smoke}}>{total} firma · sayfa {page+1}/{pageCount}</span>
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-          <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={bs(page===0?C.border:C.amber,page===0?C.smoke:C.navy,{opacity:page===0?0.5:1,cursor:page===0?"default":"pointer"})}>← Önceki 30</button>
-          <button onClick={()=>setPage(p=>Math.min(pageCount-1,p+1))} disabled={page>=pageCount-1} style={bs(page>=pageCount-1?C.border:C.amber,page>=pageCount-1?C.smoke:C.navy,{opacity:page>=pageCount-1?0.5:1,cursor:page>=pageCount-1?"default":"pointer"})}>Sonraki 30 →</button>
+          <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={bs(page===0?C.border:C.amber,page===0?C.smoke:C.onAccent,{opacity:page===0?0.5:1,cursor:page===0?"default":"pointer"})}>← Önceki 30</button>
+          <button onClick={()=>setPage(p=>Math.min(pageCount-1,p+1))} disabled={page>=pageCount-1} style={bs(page>=pageCount-1?C.border:C.amber,page>=pageCount-1?C.smoke:C.onAccent,{opacity:page>=pageCount-1?0.5:1,cursor:page>=pageCount-1?"default":"pointer"})}>Sonraki 30 →</button>
         </div>
       </div>
       {loading ? <div style={{color:C.smoke,padding:20}}>Yükleniyor...</div> : (
@@ -904,7 +905,7 @@ function CampaignCenter() {
           <button onClick={previewMatch} disabled={matching} style={ob(C.blue)}>{matching?"Hesaplanıyor...":"🔍 Hedef Kitleyi Say"}</button>
           {matchCount !== null && <span style={{fontSize:13,color:C.ghost,alignSelf:"center"}}>{matchCount} kişi eşleşiyor</span>}
         </div>
-        <button onClick={createCampaign} disabled={creating || !name.trim()} style={{...bs(C.amber,C.navy),width:"100%",opacity:creating?0.7:1}}>
+        <button onClick={createCampaign} disabled={creating || !name.trim()} style={{...bs(C.amber,C.onAccent),width:"100%",opacity:creating?0.7:1}}>
           {creating ? "⏳ Oluşturuluyor..." : "Kampanyayı ve Hedef Listesini Oluştur"}
         </button>
         {result && !result.error && <div style={{marginTop:12,fontSize:13,color:C.green}}>✅ Kampanya oluşturuldu, {result.added} hedef eklendi. Gönderim altyapısı (Faz 5/6) hazır olduğunda otomatik işlenecek.</div>}
@@ -994,8 +995,8 @@ function SendQueue({ user }) {
           linke tıkla → WhatsApp/mail açılır, mesajı sen gönder → "Gönderildi" işaretle.
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => setChannelFilter("whatsapp")} style={channelFilter === "whatsapp" ? bs(C.amber, C.navy) : ob(C.smoke)}>WhatsApp</button>
-          <button onClick={() => setChannelFilter("email")} style={channelFilter === "email" ? bs(C.amber, C.navy) : ob(C.smoke)}>E-posta</button>
+          <button onClick={() => setChannelFilter("whatsapp")} style={channelFilter === "whatsapp" ? bs(C.amber, C.onAccent) : ob(C.smoke)}>WhatsApp</button>
+          <button onClick={() => setChannelFilter("email")} style={channelFilter === "email" ? bs(C.amber, C.onAccent) : ob(C.smoke)}>E-posta</button>
           <button onClick={load} style={ob(C.blue)}>🔄 Yenile</button>
         </div>
       </div>
@@ -1011,7 +1012,7 @@ function SendQueue({ user }) {
             </div>
             <div style={{ fontSize: 12, color: C.ghost, whiteSpace: "pre-wrap", marginBottom: 10 }}>{renderMessage(row) || "(şablon boş)"}</div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => openLink(row)} style={bs(C.green, C.navy)}>{row.channel === "whatsapp" ? "💬 WhatsApp'ta Aç" : "✉ Mail'de Aç"}</button>
+              <button onClick={() => openLink(row)} style={bs(C.green, C.onAccent)}>{row.channel === "whatsapp" ? "💬 WhatsApp'ta Aç" : "✉ Mail'de Aç"}</button>
               <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi</button>
               <button onClick={() => markFailed(row)} style={ob(C.rust)}>✕ Atla</button>
             </div>
@@ -1205,7 +1206,7 @@ function ImportCenter({ user }) {
             Duplicate olarak işaretlenenler otomatik atlanmaz — içe aktarma sırasında veritabanı seviyesinde
             tekrar kontrol edilir, aynı telefon/email tekrar company_methods'a eklenmez.
           </p>
-          <button onClick={runImport} disabled={importing || !rows?.length} style={{ ...bs(C.amber, C.navy), width: "100%", marginTop: 8, opacity: importing ? 0.7 : 1 }}>
+          <button onClick={runImport} disabled={importing || !rows?.length} style={{ ...bs(C.amber, C.onAccent), width: "100%", marginTop: 8, opacity: importing ? 0.7 : 1 }}>
             {importing ? `⏳ İçe aktarılıyor... ${progress}/${rows.length}` : "✅ Onayla ve İçe Aktar"}
           </button>
         </div>
@@ -1287,7 +1288,7 @@ function CRMModul({ leads, loadLeads, user }) {
         {[["pipeline","Pipeline"],["list","Liste"],["firma","🔍 Firma Bul"]].map(([k,v])=>(
           <button key={k} onClick={()=>setSub(k)} style={bs(sub===k?C.amberDim:"transparent",sub===k?C.amber:C.smoke,{border:`1px solid ${sub===k?C.amber+"55":C.border}`})}>{v}</button>
         ))}
-        <button onClick={()=>{setEditLead(null);setShowForm(true);}} style={bs(C.amber,C.navy,{marginLeft:"auto"})}>+ Yeni Lead</button>
+        <button onClick={()=>{setEditLead(null);setShowForm(true);}} style={bs(C.amber,C.onAccent,{marginLeft:"auto"})}>+ Yeni Lead</button>
       </div>
 
       {sub==="firma"&&<FirmaBul onAdd={async(l)=>{await dbInsertLead(l, user);await loadLeads();}}/>}
@@ -1381,7 +1382,7 @@ function CRMModul({ leads, loadLeads, user }) {
             <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
               <button onClick={()=>handleDelete(detail.id)} style={ob(C.rust)}>Sil</button>
               <button onClick={()=>setDetail(null)} style={ob(C.smoke)}>Kapat</button>
-              <button onClick={()=>{setEditLead(detail);setShowForm(true);setDetail(null);}} style={bs(C.amber,C.navy)}>✏ Düzenle</button>
+              <button onClick={()=>{setEditLead(detail);setShowForm(true);setDetail(null);}} style={bs(C.amber,C.onAccent)}>✏ Düzenle</button>
             </div>
           </div>
         </div>
@@ -1415,7 +1416,7 @@ function AICopilot({ leads }) {
       <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
         {msgs.map((m,i)=>(
           <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
-            <div style={{maxWidth:"78%",background:m.role==="user"?C.amber:C.card,color:m.role==="user"?C.navy:C.ghost,borderRadius:m.role==="user"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"12px 16px",fontSize:14,lineHeight:1.7,border:`1px solid ${m.role==="user"?C.amber:C.border}`,whiteSpace:"pre-wrap"}}>{m.text}</div>
+            <div style={{maxWidth:"78%",background:m.role==="user"?C.amber:C.card,color:m.role==="user"?C.onAccent:C.ghost,borderRadius:m.role==="user"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"12px 16px",fontSize:14,lineHeight:1.7,border:`1px solid ${m.role==="user"?C.amber:C.border}`,whiteSpace:"pre-wrap"}}>{m.text}</div>
           </div>
         ))}
         {loading&&<div style={{display:"flex",justifyContent:"flex-start"}}><div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:"16px 16px 16px 4px",padding:"12px 16px",color:C.smoke}}>⏳ Düşünüyor...</div></div>}
@@ -1425,7 +1426,7 @@ function AICopilot({ leads }) {
       </div>
       <div style={{display:"flex",gap:10}}>
         <input style={{...inpStyle,flex:1}} placeholder="Sorunuzu yazın..." value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()}/>
-        <button onClick={()=>send()} disabled={loading} style={bs(C.amber,C.navy,{padding:"8px 20px"})}>Gönder</button>
+        <button onClick={()=>send()} disabled={loading} style={bs(C.amber,C.onAccent,{padding:"8px 20px"})}>Gönder</button>
       </div>
     </div>
   );
@@ -1509,7 +1510,7 @@ export default function GNDOS() {
         {active==="dokuman"&&<SimpleModule title="📁 Knowledge Base" content="Bilgi bankası yakında aktif olacak"/>}
       </div>
 
-      <div style={{position:"fixed",bottom:8,right:12,fontSize:11,color:"rgba(255,255,255,0.25)",pointerEvents:"none",zIndex:40}}>
+      <div style={{position:"fixed",bottom:8,right:12,fontSize:11,color:"rgba(0,0,0,0.18)",pointerEvents:"none",zIndex:40}}>
         Shadow Master
       </div>
     </div>
