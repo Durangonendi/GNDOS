@@ -24,9 +24,9 @@ create index if not exists idx_outbound_messages_status on outbound_messages(sta
 -- campaign_targets: firma bazli kampanya gecmisi (CompanyDetail)
 create index if not exists idx_campaign_targets_company_id on campaign_targets(company_id);
 
--- leads: CRM/Dashboard'da stage ve tarih bazli filtreler
+-- leads: CRM/Dashboard'da stage bazli filtreler
+-- (bu tabloda created_at sutunu yok, siralama zaten id uzerinden yapiliyor)
 create index if not exists idx_leads_stage on leads(stage);
-create index if not exists idx_leads_created_at on leads(created_at);
 
 -- Firma adi aramasi (ilike '%metin%') 100.000+ satirda hizli kalsin diye
 -- trigram index. Mevcut btree index'e dokunulmuyor, ek olarak ekleniyor.
