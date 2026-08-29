@@ -1929,6 +1929,7 @@ function CampaignCenter() {
 const SQ_TABS = ["bekleyen", "gonderildi", "atlanan", "cevaplanan", "takip"];
 const SQ_TAB_LABEL = { bekleyen: "Bekleyen", gonderildi: "Gönderildi", atlanan: "Atlanan", cevaplanan: "Cevaplanan", takip: "Takip" };
 
+const SQ_PAGE_SIZE = 100;
 function SendQueue({ user }) {
   const [tab, setTab] = useState("bekleyen");
   const [rows, setRows] = useState([]);
@@ -1936,6 +1937,8 @@ function SendQueue({ user }) {
   const [totalInQueue, setTotalInQueue] = useState(0);
   const [doneCount, setDoneCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [channelFilter, setChannelFilter] = useState("");
   const [campaigns, setCampaigns] = useState([]);
   const [campaignFilter, setCampaignFilter] = useState("");
@@ -1971,9 +1974,13 @@ function SendQueue({ user }) {
     }
 
     const statusMap = { bekleyen: "queued", gonderildi: "sent", atlanan: "failed" };
-    const url = `${SUPABASE_URL}/rest/v1/outbound_messages?${embed}&status=eq.${statusMap[tab]}${chFilter}${campFilter}&order=id.asc&limit=200`;
-    const res = await fetch(url, { headers: h });
+    // Bekleyen: id.asc (kuyruk sirasi). Gonderildi/Atlanan: id.desc (en yeni once)
+    // + sayfalama, yoksa 100'den fazla mesaj biriktiginde eski kayitlar hic gorunmez kalirdi.
+    const order = tab === "bekleyen" ? "id.asc" : "id.desc";
+    const url = `${SUPABASE_URL}/rest/v1/outbound_messages?${embed}&status=eq.${statusMap[tab]}${chFilter}${campFilter}&order=${order}`;
+    const res = await fetch(url, { headers: { ...h, Range: `0-${SQ_PAGE_SIZE - 1}` } });
     let data = res.ok ? await res.json() : [];
+    setHasMore(data.length === SQ_PAGE_SIZE);
 
     if (tab === "bekleyen") {
       const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -1996,6 +2003,23 @@ function SendQueue({ user }) {
     setLoading(false);
   }, [tab, channelFilter, campaignFilter]);
   useEffect(() => { load(); }, [load]);
+
+  async function loadMoreHistory() {
+    if (tab !== "gonderildi" && tab !== "atlanan") return;
+    setLoadingMore(true);
+    const token = await authToken();
+    const h = authHeaders(token);
+    const embed = "select=id,channel,template,status,sequence_step,sent_at,contact_methods(id,value_original,value_normalized,type,contacts(id,person_name,status,followup_date)),campaign_targets!inner(campaign_id,company_id,companies(id,name_original,country),campaigns(name))";
+    const statusMap = { gonderildi: "sent", atlanan: "failed" };
+    const chFilter = channelFilter ? `&channel=eq.${channelFilter}` : "";
+    const campFilter = campaignFilter ? `&campaign_targets.campaign_id=eq.${campaignFilter}` : "";
+    const url = `${SUPABASE_URL}/rest/v1/outbound_messages?${embed}&status=eq.${statusMap[tab]}${chFilter}${campFilter}&order=id.desc`;
+    const res = await fetch(url, { headers: { ...h, Range: `${rows.length}-${rows.length + SQ_PAGE_SIZE - 1}` } });
+    const data = res.ok ? await res.json() : [];
+    setRows(prev => [...prev, ...data]);
+    setHasMore(data.length === SQ_PAGE_SIZE);
+    setLoadingMore(false);
+  }
 
   function renderMessage(row) {
     const companyName = row.campaign_targets?.companies?.name_original || "";
@@ -2145,6 +2169,9 @@ function SendQueue({ user }) {
             </div>
           );
         })}
+        {!loading && hasMore && (tab === "gonderildi" || tab === "atlanan") && (
+          <button onClick={loadMoreHistory} disabled={loadingMore} style={{ ...ob(C.blue), marginTop: 8 }}>{loadingMore ? "⏳ Yükleniyor..." : "Daha fazla yükle"}</button>
+        )}
       </div>
     </div>
   );
