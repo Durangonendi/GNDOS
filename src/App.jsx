@@ -1940,6 +1940,7 @@ function SendQueue({ user }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [channelFilter, setChannelFilter] = useState("");
+  const [sendingEmailId, setSendingEmailId] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
   const [campaignFilter, setCampaignFilter] = useState("");
 
@@ -2061,6 +2062,25 @@ function SendQueue({ user }) {
     setDoneCount(d => d + 1);
   }
 
+  async function sendEmailNow(row) {
+    const method = row.contact_methods;
+    if (!method?.value_original) return;
+    setSendingEmailId(row.id);
+    try {
+      const res = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: method.value_original, subject: "GND İş Makineleri", text: renderMessage(row) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Gönderilemedi");
+      await markSent(row);
+    } catch (e) {
+      alert("E-posta gönderilemedi: " + e.message);
+    }
+    setSendingEmailId(null);
+  }
+
   async function markFailed(row) {
     const token = await authToken();
     if (!token) return;
@@ -2158,8 +2178,9 @@ function SendQueue({ user }) {
               {sentToday && <div style={{ fontSize: 11, color: C.amber, marginBottom: 6 }}>⚠ Bugün zaten gönderildi</div>}
               <div style={{ fontSize: 12, color: C.ghost, whiteSpace: "pre-wrap", marginBottom: 10 }}>{renderMessage(row) || "(şablon boş)"}</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {tab === "bekleyen" && !sentToday && <button onClick={() => openLink(row)} style={bs(C.green, C.onAccent)}>{row.channel === "whatsapp" ? "💬 WhatsApp'ta Aç" : "✉ Mail'de Aç"}</button>}
-                {tab === "bekleyen" && !sentToday && <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi</button>}
+                {tab === "bekleyen" && !sentToday && row.channel === "email" && <button onClick={() => sendEmailNow(row)} disabled={sendingEmailId === row.id} style={bs(C.green, C.onAccent)}>{sendingEmailId === row.id ? "⏳ Gönderiliyor..." : "📧 E-postayı Gönder"}</button>}
+                {tab === "bekleyen" && !sentToday && row.channel === "whatsapp" && <button onClick={() => openLink(row)} style={bs(C.green, C.onAccent)}>💬 WhatsApp'ta Aç</button>}
+                {tab === "bekleyen" && !sentToday && <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi Olarak İşaretle</button>}
                 {tab === "bekleyen" && <button onClick={() => markFailed(row)} style={ob(C.rust)}>✕ Atla</button>}
                 {tab !== "bekleyen" && <span style={pill(row.status === "sent" ? C.green : C.rust)}>{row.status}{row.sent_at ? " · " + new Date(row.sent_at).toLocaleDateString("tr-TR") : ""}</span>}
                 <button onClick={() => setContactStatus(row, "Cevap geldi")} style={ob(C.green)}>💬 Cevap Geldi</button>
