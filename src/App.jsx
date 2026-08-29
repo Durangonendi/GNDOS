@@ -1447,20 +1447,77 @@ function CampaignCenter() {
 // bağlı değil (Duran'ın kendi hesap doğrulaması gerekiyor). Bu yüzden gönderim
 // şimdilik yarı-otomatik: wa.me / mailto linki operatörün kendi WhatsApp/mail
 // istemcisini açar, operatör gönderir ve burada "Gönderildi" olarak işaretler.
+// Aynı kişiye aynı gün ikinci kez gönderim, DB seviyesinde de engelleniyor
+// (bkz. supabase_migration_v1_operations.sql — uq_outbound_sent_per_day).
+const SQ_TABS = ["bekleyen", "gonderildi", "atlanan", "cevaplanan", "takip"];
+const SQ_TAB_LABEL = { bekleyen: "Bekleyen", gonderildi: "Gönderildi", atlanan: "Atlanan", cevaplanan: "Cevaplanan", takip: "Takip" };
+
 function SendQueue({ user }) {
+  const [tab, setTab] = useState("bekleyen");
   const [rows, setRows] = useState([]);
+  const [sentTodayIds, setSentTodayIds] = useState(new Set());
+  const [totalInQueue, setTotalInQueue] = useState(0);
+  const [doneCount, setDoneCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [channelFilter, setChannelFilter] = useState("whatsapp");
+  const [channelFilter, setChannelFilter] = useState("");
+  const [campaigns, setCampaigns] = useState([]);
+  const [campaignFilter, setCampaignFilter] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const token = await authToken();
+      if (!token) return;
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/campaigns?select=id,name&order=id.desc`, { headers: authHeaders(token) });
+      setCampaigns(r.ok ? await r.json() : []);
+    })();
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     const token = await authToken();
     if (!token) { setLoading(false); return; }
-    const url = `${SUPABASE_URL}/rest/v1/outbound_messages?select=id,channel,template,status,sequence_step,contact_methods(value_original,value_normalized,type),campaign_targets(campaign_id,companies(name_original))&status=eq.queued&channel=eq.${channelFilter}&order=id.asc&limit=50`;
-    const res = await fetch(url, { headers: authHeaders(token) });
-    setRows(res.ok ? await res.json() : []);
+    const h = authHeaders(token);
+    const embed = "select=id,channel,template,status,sequence_step,sent_at,contact_methods(id,value_original,value_normalized,type,contacts(id,person_name,status,followup_date)),campaign_targets!inner(campaign_id,company_id,companies(id,name_original,country),campaigns(name))";
+    let chFilter = channelFilter ? `&channel=eq.${channelFilter}` : "";
+    let campFilter = campaignFilter ? `&campaign_targets.campaign_id=eq.${campaignFilter}` : "";
+
+    if (tab === "cevaplanan" || tab === "takip") {
+      // Bu iki sekme mesaj degil, KISI/ILISKI durumuna gore: contacts tablosu.
+      let url = `${SUPABASE_URL}/rest/v1/contacts?select=id,person_name,status,followup_date,last_contact_at,company_id,companies(id,name_original,country),contact_methods(id,value_original,value_normalized,type)`;
+      url += tab === "cevaplanan" ? `&status=eq.Cevap geldi` : `&followup_date=not.is.null&order=followup_date.asc`;
+      const res = await fetch(url, { headers: h });
+      const data = res.ok ? await res.json() : [];
+      setRows(data);
+      setTotalInQueue(data.length); setDoneCount(data.length);
+      setLoading(false);
+      return;
+    }
+
+    const statusMap = { bekleyen: "queued", gonderildi: "sent", atlanan: "failed" };
+    const url = `${SUPABASE_URL}/rest/v1/outbound_messages?${embed}&status=eq.${statusMap[tab]}${chFilter}${campFilter}&order=id.asc&limit=200`;
+    const res = await fetch(url, { headers: h });
+    let data = res.ok ? await res.json() : [];
+
+    if (tab === "bekleyen") {
+      const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+      const sr = await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?select=contact_method_id&status=eq.sent&sent_at=gte.${todayStart.toISOString()}`, { headers: h });
+      const sentToday = sr.ok ? await sr.json() : [];
+      const sentIds = new Set(sentToday.map(x => x.contact_method_id));
+      setSentTodayIds(sentIds);
+    }
+
+    setRows(data);
+    // Ilerleme: bu kampanya/kanal filtresindeki TUM mesajlar vs tamamlanan (sent+failed)
+    const countSelect = "select=id,campaign_targets!inner(campaign_id)";
+    const countFilters = [chFilter.replace(/^&/, ""), campFilter.replace(/^&/, "")].filter(Boolean).join("&");
+    const allR = await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?${countSelect}${countFilters ? "&" + countFilters : ""}`, { headers: { ...h, Prefer: "count=exact", Range: "0-0" } });
+    const allRange = allR.headers.get("Content-Range");
+    setTotalInQueue(allRange ? Number(allRange.split("/")[1]) : data.length);
+    const doneR = await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?${countSelect}&status=in.(sent,failed)${countFilters ? "&" + countFilters : ""}`, { headers: { ...h, Prefer: "count=exact", Range: "0-0" } });
+    const doneRange = doneR.headers.get("Content-Range");
+    setDoneCount(doneRange ? Number(doneRange.split("/")[1]) : 0);
     setLoading(false);
-  }, [channelFilter]);
+  }, [tab, channelFilter, campaignFilter]);
   useEffect(() => { load(); }, [load]);
 
   function renderMessage(row) {
@@ -1480,16 +1537,27 @@ function SendQueue({ user }) {
     }
   }
 
+  async function logActivity(row, action, result) {
+    const token = await authToken();
+    await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
+      method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ company_id: row.campaign_targets?.company_id || null, contact_id: row.contact_methods?.contacts?.id || null, campaign_id: row.campaign_targets?.campaign_id || null, channel: row.channel, action, result, actor_user_id: user?.id || null }),
+    });
+  }
+
   async function markSent(row) {
     const token = await authToken();
     if (!token) return;
-    await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?id=eq.${row.id}`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?id=eq.${row.id}`, {
       method: "PATCH",
       headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
       body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
     });
+    if (!res.ok) { alert("Kaydedilemedi — bu kişiye bugün zaten gönderim yapılmış olabilir."); return; }
     await writeAudit(token, user, "send", "outbound_messages", row.id, { status: "queued" }, { status: "sent" });
+    await logActivity(row, row.channel === "whatsapp" ? "whatsapp_sent" : "email_sent", "sent");
     setRows(prev => prev.filter(r => r.id !== row.id));
+    setDoneCount(d => d + 1);
   }
 
   async function markFailed(row) {
@@ -1500,8 +1568,30 @@ function SendQueue({ user }) {
       headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
       body: JSON.stringify({ status: "failed", last_error: "Operatör manuel olarak atladı/başarısız işaretledi." }),
     });
+    await logActivity(row, "skipped", "skipped");
+    setRows(prev => prev.filter(r => r.id !== row.id));
+    setDoneCount(d => d + 1);
+  }
+
+  async function setContactStatus(row, status, followupDate) {
+    const contactId = row.contact_methods?.contacts?.id;
+    if (!contactId) { alert("Bu satırda kişi kaydı yok."); return; }
+    const token = await authToken();
+    await fetch(`${SUPABASE_URL}/rest/v1/contacts?id=eq.${contactId}`, {
+      method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ status, ...(followupDate ? { followup_date: followupDate } : {}) }),
+    });
+    await logActivity(row, status === "Cevap geldi" ? "replied" : "followup_created", status);
     setRows(prev => prev.filter(r => r.id !== row.id));
   }
+
+  function takibeAl(row) {
+    const d = prompt("Takip tarihi (YYYY-AA-GG), örn. " + new Date(Date.now()+86400000).toISOString().slice(0,10));
+    if (!d) return;
+    setContactStatus(row, "Tekrar ara", d);
+  }
+
+  const progressPct = totalInQueue > 0 ? Math.round((doneCount / totalInQueue) * 100) : 0;
 
   return (
     <div>
@@ -1511,30 +1601,70 @@ function SendQueue({ user }) {
           Meta WhatsApp Business API ve e-posta sağlayıcısı henüz bağlı değil, bu yüzden gönderim elle onaylanıyor:
           linke tıkla → WhatsApp/mail açılır, mesajı sen gönder → "Gönderildi" işaretle.
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => setChannelFilter("whatsapp")} style={channelFilter === "whatsapp" ? bs(C.amber, C.onAccent) : ob(C.smoke)}>WhatsApp</button>
-          <button onClick={() => setChannelFilter("email")} style={channelFilter === "email" ? bs(C.amber, C.onAccent) : ob(C.smoke)}>E-posta</button>
+        {tab !== "cevaplanan" && tab !== "takip" && (
+          <div style={{ fontSize: 12, color: C.smoke, marginBottom: 12 }}>
+            <b style={{ color: C.ghost }}>{doneCount} / {totalInQueue}</b> tamamlandı
+            <div style={{ background: C.panel, borderRadius: 6, height: 6, marginTop: 6, overflow: "hidden" }}>
+              <div style={{ background: C.amber, height: "100%", width: `${progressPct}%`, transition: "width .3s" }} />
+            </div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {SQ_TABS.map(t => <button key={t} onClick={() => setTab(t)} style={tab === t ? bs(C.amber, C.onAccent) : ob(C.smoke)}>{SQ_TAB_LABEL[t]}</button>)}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select style={{ ...inpStyle, width: 140, cursor: "pointer" }} value={channelFilter} onChange={e => setChannelFilter(e.target.value)}>
+            <option value="">Tüm kanallar</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">E-posta</option>
+          </select>
+          <select style={{ ...inpStyle, width: 200, cursor: "pointer" }} value={campaignFilter} onChange={e => setCampaignFilter(e.target.value)}>
+            <option value="">Tüm kampanyalar</option>
+            {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
           <button onClick={load} style={ob(C.blue)}>🔄 Yenile</button>
         </div>
       </div>
 
       <div style={cardSt({ padding: 20 })}>
         {loading && <div style={{ color: C.smoke }}>⏳ Yükleniyor...</div>}
-        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Kuyrukta bekleyen mesaj yok.</div>}
-        {rows.map(row => (
-          <div key={row.id} style={{ padding: "12px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 10 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-              <b style={{ fontSize: 13 }}>{row.campaign_targets?.companies?.name_original || "—"}</b>
-              <span style={{ fontSize: 12, color: C.smoke }}>{row.contact_methods?.value_original}</span>
+        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Bu filtrede kayıt yok.</div>}
+
+        {!loading && (tab === "cevaplanan" || tab === "takip") && rows.map(c => (
+          <div key={c.id} style={{ padding: "12px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <b style={{ fontSize: 13 }}>{c.companies?.name_original || "—"}</b>
+              <span style={pill(C.amber)}>{c.status}</span>
             </div>
-            <div style={{ fontSize: 12, color: C.ghost, whiteSpace: "pre-wrap", marginBottom: 10 }}>{renderMessage(row) || "(şablon boş)"}</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => openLink(row)} style={bs(C.green, C.onAccent)}>{row.channel === "whatsapp" ? "💬 WhatsApp'ta Aç" : "✉ Mail'de Aç"}</button>
-              <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi</button>
-              <button onClick={() => markFailed(row)} style={ob(C.rust)}>✕ Atla</button>
-            </div>
+            <div style={{ fontSize: 12, color: C.smoke, marginTop: 4 }}>{c.person_name || "—"} · {c.companies?.country || ""}{c.followup_date ? ` · Takip: ${c.followup_date}` : ""}</div>
           </div>
         ))}
+
+        {!loading && tab !== "cevaplanan" && tab !== "takip" && rows.map(row => {
+          const sentToday = tab === "bekleyen" && row.contact_methods && sentTodayIds.has(row.contact_methods.id);
+          return (
+            <div key={row.id} style={{ padding: "12px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${sentToday ? C.amber : C.border}`, marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
+                <b style={{ fontSize: 13 }}>{row.campaign_targets?.companies?.name_original || "—"}</b>
+                <span style={{ fontSize: 11, color: C.smoke }}>{row.campaign_targets?.campaigns?.name} · {row.campaign_targets?.companies?.country}</span>
+              </div>
+              <div style={{ fontSize: 12, color: C.smoke, marginBottom: 6 }}>
+                {row.contact_methods?.contacts?.person_name || "—"} · {row.contact_methods?.value_original}
+              </div>
+              {sentToday && <div style={{ fontSize: 11, color: C.amber, marginBottom: 6 }}>⚠ Bugün zaten gönderildi</div>}
+              <div style={{ fontSize: 12, color: C.ghost, whiteSpace: "pre-wrap", marginBottom: 10 }}>{renderMessage(row) || "(şablon boş)"}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {tab === "bekleyen" && !sentToday && <button onClick={() => openLink(row)} style={bs(C.green, C.onAccent)}>{row.channel === "whatsapp" ? "💬 WhatsApp'ta Aç" : "✉ Mail'de Aç"}</button>}
+                {tab === "bekleyen" && !sentToday && <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi</button>}
+                {tab === "bekleyen" && <button onClick={() => markFailed(row)} style={ob(C.rust)}>✕ Atla</button>}
+                {tab !== "bekleyen" && <span style={pill(row.status === "sent" ? C.green : C.rust)}>{row.status}{row.sent_at ? " · " + new Date(row.sent_at).toLocaleDateString("tr-TR") : ""}</span>}
+                <button onClick={() => setContactStatus(row, "Cevap geldi")} style={ob(C.green)}>💬 Cevap Geldi</button>
+                <button onClick={() => setContactStatus(row, "İlgilenmiyor")} style={ob(C.smoke)}>🚫 İlgilenmiyor</button>
+                <button onClick={() => takibeAl(row)} style={ob(C.amber)}>📅 Takibe Al</button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
