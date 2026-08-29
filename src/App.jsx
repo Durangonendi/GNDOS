@@ -2173,7 +2173,8 @@ function SendQueue({ user }) {
               {sentToday && <div style={{ fontSize: 11, color: C.amber, marginBottom: 6 }}>⚠ Bugün zaten gönderildi</div>}
               <div style={{ fontSize: 12, color: C.ghost, whiteSpace: "pre-wrap", marginBottom: 10 }}>{renderMessage(row) || "(şablon boş)"}</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {tab === "bekleyen" && !sentToday && row.channel === "email" && <button onClick={() => sendEmailNow(row)} disabled={sendingEmailId === row.id} style={bs(C.green, C.onAccent)}>{sendingEmailId === row.id ? "⏳ Gönderiliyor..." : "📧 E-postayı Gönder"}</button>}
+                {tab === "bekleyen" && !sentToday && row.channel === "email" && <button onClick={() => sendEmailNow(row)} disabled={sendingEmailId === row.id} style={bs(C.green, C.onAccent)}>{sendingEmailId === row.id ? "⏳ Gönderiliyor..." : "📧 Otomatik Gönder"}</button>}
+                {tab === "bekleyen" && !sentToday && row.channel === "email" && <button onClick={() => openLink(row)} style={ob(C.blue)}>✉ Mail Programında Aç</button>}
                 {tab === "bekleyen" && !sentToday && row.channel === "whatsapp" && <button onClick={() => openLink(row)} style={bs(C.green, C.onAccent)}>💬 WhatsApp'ta Aç</button>}
                 {tab === "bekleyen" && !sentToday && <button onClick={() => markSent(row)} style={ob(C.blue)}>✅ Gönderildi Olarak İşaretle</button>}
                 {tab === "bekleyen" && <button onClick={() => markFailed(row)} style={ob(C.rust)}>✕ Atla</button>}
