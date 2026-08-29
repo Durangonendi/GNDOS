@@ -748,13 +748,13 @@ function CompaniesModul() {
 
   return (
     <div>
-      <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
-        <input style={{...inpStyle,width:260}} placeholder="🔍 Firma ara..." value={search}
+      <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+        <input style={{...inpStyle,width:280,fontSize:15}} placeholder="🔍 Firma adı yaz ve ara..." value={search}
           onChange={e=>{setSearch(e.target.value); setPage(0);}}/>
         <span style={{fontSize:12,color:C.smoke}}>{total} firma · sayfa {page+1}/{pageCount}</span>
-        <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-          <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={ob(C.smoke)}>← Önceki</button>
-          <button onClick={()=>setPage(p=>Math.min(pageCount-1,p+1))} disabled={page>=pageCount-1} style={ob(C.smoke)}>Sonraki →</button>
+        <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={bs(page===0?C.border:C.amber,page===0?C.smoke:C.navy,{opacity:page===0?0.5:1,cursor:page===0?"default":"pointer"})}>← Önceki 30</button>
+          <button onClick={()=>setPage(p=>Math.min(pageCount-1,p+1))} disabled={page>=pageCount-1} style={bs(page>=pageCount-1?C.border:C.amber,page>=pageCount-1?C.smoke:C.navy,{opacity:page>=pageCount-1?0.5:1,cursor:page>=pageCount-1?"default":"pointer"})}>Sonraki 30 →</button>
         </div>
       </div>
       {loading ? <div style={{color:C.smoke,padding:20}}>Yükleniyor...</div> : (
