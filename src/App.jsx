@@ -280,7 +280,7 @@ function LoginScreen({ onLogin }) {
   return (
     <div style={{fontFamily:"'Inter',sans-serif",background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:40,width:340,textAlign:"center"}}>
-        <div style={{fontSize:28,fontWeight:900,letterSpacing:4,color:C.amber,marginBottom:4}}>GNDOS</div>
+        <img src="/logo.png" alt="GND" style={{height:56,marginBottom:8}}/>
         <div style={{fontSize:11,color:C.smoke,letterSpacing:2,marginBottom:32}}>GLOBAL OPS PLATFORM</div>
         <input type="email" placeholder="E-posta" value={email} autoComplete="username"
           onChange={e=>setEmail(e.target.value)}
@@ -1476,9 +1476,8 @@ export default function GNDOS() {
   return (
     <div style={{fontFamily:"'Inter','Helvetica Neue',sans-serif",background:C.bg,minHeight:"100vh",color:C.ghost,display:"flex",flexDirection:"column"}}>
       <div style={{background:C.iron,borderBottom:`2px solid ${C.amber}22`,padding:"0 24px",display:"flex",alignItems:"center",height:54,flexShrink:0,position:"sticky",top:0,zIndex:50}}>
-        <button onClick={()=>setActive("home")} style={{background:"none",border:"none",cursor:"pointer",padding:"0 16px 0 0",borderRight:`1px solid ${C.border}`,marginRight:16}}>
-          <div style={{fontWeight:900,fontSize:18,letterSpacing:4,color:C.amber,lineHeight:1}}>GNDOS</div>
-          <div style={{fontSize:8,color:C.smoke,letterSpacing:2}}>GLOBAL OPS PLATFORM</div>
+        <button onClick={()=>setActive("home")} style={{background:"none",border:"none",cursor:"pointer",padding:"0 16px 0 0",borderRight:`1px solid ${C.border}`,marginRight:16,display:"flex",alignItems:"center",height:"100%"}}>
+          <img src="/logo.png" alt="GND" style={{height:30}}/>
         </button>
         <div style={{display:"flex",gap:0,flex:1,overflowX:"auto"}}>
           {MODULES.map(m=>(
