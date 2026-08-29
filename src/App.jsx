@@ -2723,133 +2723,59 @@ function AICopilot({ leads }) {
 }
 
 // ─── FB GRUP DENEYİ (120 grup/gün "kontrol" vs az-ama-kaliteli "test") ────────
-// social_groups / social_queue tabloları Faz 7'de tanımlanmıştı ama hiç UI'a
-// bağlanmamıştı; bu modül onları 1 haftalık A/B testi için kullanıyor.
-// experiment_bucket ('control'/'test') ve social_queue.views/content_variant
-// kolonları bu deney için eklendi (bkz. supabase_migration_v5_fb_experiment.sql).
-const FB_CONCURRENCY = 10;
-
+// Basit gunluk agregat kayit: tarih + bucket + grup sayisi + toplam
+// goruntulenme. Grup isimlerini tek tek girmeye gerek yok — sorulan soru
+// "hacim mi kalite mi kazaniyor" oldugu icin gunluk toplam yeterli.
 function FbExperiment() {
-  const [entries, setEntries] = useState([]);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [logDate, setLogDate] = useState(today());
   const [bucket, setBucket] = useState("control");
-  const [groupNames, setGroupNames] = useState("");
-  const [contentVariant, setContentVariant] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [submitMsg, setSubmitMsg] = useState(null);
-  const [bulkViewsInput, setBulkViewsInput] = useState({});
+  const [groupCount, setGroupCount] = useState("");
+  const [totalViews, setTotalViews] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null);
 
-  const loadEntries = useCallback(async () => {
+  const loadRows = useCallback(async () => {
     setLoading(true);
     const token = await authToken();
     if (!token) { setLoading(false); return; }
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/social_queue?select=id,scheduled_at,views,content_variant,social_groups(id,name,experiment_bucket)&channel=eq.facebook_group&order=scheduled_at.desc&limit=1000`,
+      `${SUPABASE_URL}/rest/v1/fb_experiment_days?select=*&order=log_date.desc&limit=60`,
       { headers: authHeaders(token) }
     );
     const data = await res.json();
-    setEntries(Array.isArray(data) ? data : []);
+    setRows(Array.isArray(data) ? data : []);
     setLoading(false);
   }, []);
-  useEffect(() => { loadEntries(); }, [loadEntries]);
+  useEffect(() => { loadRows(); }, [loadRows]);
 
-  async function submitBatch() {
-    const names = groupNames.split("\n").map(s => s.trim()).filter(Boolean);
-    if (!names.length) return;
-    setSubmitting(true);
-    setSubmitMsg(null);
+  async function saveRow() {
+    if (!groupCount || !totalViews) return;
+    setSaving(true);
+    setSaveMsg(null);
     const token = await authToken();
-    if (!token) { setSubmitting(false); return; }
-    const scheduledAt = new Date(logDate + "T20:00:00").toISOString();
-
-    let created = 0, failed = 0;
-    let cursor = 0;
-    async function worker() {
-      while (cursor < names.length) {
-        const name = names[cursor++];
-        try {
-          const findRes = await fetch(
-            `${SUPABASE_URL}/rest/v1/social_groups?name=ilike.${encodeURIComponent(name)}&select=id&limit=1`,
-            { headers: authHeaders(token) }
-          );
-          const found = await findRes.json();
-          let groupId = found?.[0]?.id;
-          if (!groupId) {
-            const gRes = await fetch(`${SUPABASE_URL}/rest/v1/social_groups`, {
-              method: "POST",
-              headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
-              body: JSON.stringify({ name, experiment_bucket: bucket, active: true }),
-            });
-            const gData = await gRes.json();
-            groupId = gData?.[0]?.id;
-          }
-          if (!groupId) { failed++; continue; }
-          const qRes = await fetch(`${SUPABASE_URL}/rest/v1/social_queue`, {
-            method: "POST",
-            headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
-            body: JSON.stringify({
-              channel: "facebook_group",
-              target_group_id: groupId,
-              status: "shared",
-              scheduled_at: scheduledAt,
-              shared_at: scheduledAt,
-              content_variant: contentVariant || null,
-            }),
-          });
-          if (qRes.ok) created++; else failed++;
-        } catch (e) { failed++; }
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(FB_CONCURRENCY, names.length) }, worker));
-
-    setSubmitMsg({ created, failed, bucket });
-    setGroupNames("");
-    setSubmitting(false);
-    loadEntries();
-  }
-
-  async function bulkSetViews(dateKey, bkt) {
-    const val = Number(bulkViewsInput[`${dateKey}_${bkt}`]);
-    if (!Number.isFinite(val)) return;
-    const ids = entries
-      .filter(e => e.social_groups?.experiment_bucket === bkt && (e.scheduled_at || "").slice(0, 10) === dateKey && e.views == null)
-      .map(e => e.id);
-    if (!ids.length) return;
-    const token = await authToken();
-    if (!token) return;
-    await fetch(`${SUPABASE_URL}/rest/v1/social_queue?id=in.(${ids.join(",")})`, {
-      method: "PATCH",
-      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
-      body: JSON.stringify({ views: val }),
+    if (!token) { setSaving(false); return; }
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/fb_experiment_days?on_conflict=log_date,bucket`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ log_date: logDate, bucket, group_count: Number(groupCount), total_views: Number(totalViews) }),
     });
-    setBulkViewsInput(prev => ({ ...prev, [`${dateKey}_${bkt}`]: "" }));
-    loadEntries();
+    if (res.ok) { setSaveMsg("ok"); setGroupCount(""); setTotalViews(""); loadRows(); }
+    else setSaveMsg("error");
+    setSaving(false);
   }
-
-  const byDay = useMemo(() => {
-    const map = {};
-    for (const e of entries) {
-      const bkt = e.social_groups?.experiment_bucket;
-      if (bkt !== "control" && bkt !== "test") continue;
-      const dateKey = (e.scheduled_at || "").slice(0, 10);
-      if (!dateKey) continue;
-      map[dateKey] = map[dateKey] || { control: { count: 0, views: 0, pending: 0 }, test: { count: 0, views: 0, pending: 0 } };
-      map[dateKey][bkt].count++;
-      if (e.views != null) map[dateKey][bkt].views += e.views;
-      else map[dateKey][bkt].pending++;
-    }
-    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [entries]);
 
   const totals = useMemo(() => {
-    const t = { control: { count: 0, views: 0 }, test: { count: 0, views: 0 } };
-    for (const [, day] of byDay) {
-      t.control.count += day.control.count; t.control.views += day.control.views;
-      t.test.count += day.test.count; t.test.views += day.test.views;
+    const t = { control: { count: 0, views: 0, days: 0 }, test: { count: 0, views: 0, days: 0 } };
+    for (const r of rows) {
+      if (r.bucket !== "control" && r.bucket !== "test") continue;
+      t[r.bucket].count += r.group_count || 0;
+      t[r.bucket].views += r.total_views || 0;
+      t[r.bucket].days += 1;
     }
     return t;
-  }, [byDay]);
+  }, [rows]);
 
   const avg = (b) => (totals[b].count ? (totals[b].views / totals[b].count).toFixed(0) : "—");
 
@@ -2859,18 +2785,18 @@ function FbExperiment() {
         <div style={cardSt({ padding: 20 })}>
           <div style={{ fontSize: 12, color: C.smoke, marginBottom: 4 }}>KONTROL — 120 grup, tek metin</div>
           <div style={{ fontSize: 28, fontWeight: 800, color: C.ghost }}>{totals.control.views.toLocaleString("tr-TR")}</div>
-          <div style={{ fontSize: 12, color: C.muted }}>{totals.control.count} kayıt · ortalama {avg("control")} görüntülenme/grup</div>
+          <div style={{ fontSize: 12, color: C.muted }}>{totals.control.days} gün · ortalama {avg("control")} görüntülenme/grup</div>
         </div>
         <div style={cardSt({ padding: 20 })}>
           <div style={{ fontSize: 12, color: C.smoke, marginBottom: 4 }}>TEST — az grup, varyasyonlu içerik</div>
           <div style={{ fontSize: 28, fontWeight: 800, color: C.green }}>{totals.test.views.toLocaleString("tr-TR")}</div>
-          <div style={{ fontSize: 12, color: C.muted }}>{totals.test.count} kayıt · ortalama {avg("test")} görüntülenme/grup</div>
+          <div style={{ fontSize: 12, color: C.muted }}>{totals.test.days} gün · ortalama {avg("test")} görüntülenme/grup</div>
         </div>
       </div>
 
       <div style={cardSt({ padding: 24, marginBottom: 20 })}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>📤 Bugünün Paylaşımını Kaydet</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>📤 Bugünü Kaydet (10 saniye)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
           <div><label style={{ fontSize: 11, color: C.smoke }}>TARİH</label><input type="date" style={inpStyle} value={logDate} onChange={e => setLogDate(e.target.value)} /></div>
           <div><label style={{ fontSize: 11, color: C.smoke }}>GRUP</label>
             <select style={{ ...inpStyle, cursor: "pointer" }} value={bucket} onChange={e => setBucket(e.target.value)}>
@@ -2878,42 +2804,24 @@ function FbExperiment() {
               <option value="test">Test (kaliteli/az grup)</option>
             </select>
           </div>
-          <div><label style={{ fontSize: 11, color: C.smoke }}>İÇERİK VARYANTI (opsiyonel)</label><input style={inpStyle} value={contentVariant} onChange={e => setContentVariant(e.target.value)} placeholder="Örn: Varyant A" /></div>
+          <div><label style={{ fontSize: 11, color: C.smoke }}>KAÇ GRUBA ATTIN</label><input type="number" style={inpStyle} value={groupCount} onChange={e => setGroupCount(e.target.value)} placeholder="Örn: 120" /></div>
+          <div><label style={{ fontSize: 11, color: C.smoke }}>TOPLAM GÖRÜNTÜLENME</label><input type="number" style={inpStyle} value={totalViews} onChange={e => setTotalViews(e.target.value)} placeholder="Örn: 3200" /></div>
         </div>
-        <label style={{ fontSize: 11, color: C.smoke }}>GRUP İSİMLERİ (her satıra bir grup)</label>
-        <textarea style={{ ...inpStyle, minHeight: 100, resize: "vertical", fontFamily: "inherit" }} value={groupNames} onChange={e => setGroupNames(e.target.value)} placeholder={"Örn:\nHafriyat ve İş Makinesi TR\nExcavator Buy Sell Global\n..."} />
-        <div style={{ fontSize: 10, color: C.muted, margin: "6px 0 14px" }}>Yeni grup ismi girersen otomatik kaydedilir, aynı isim tekrar girilirse mevcut grup kullanılır.</div>
-        <button onClick={submitBatch} disabled={submitting || !groupNames.trim()} style={{ ...bs(C.amber, C.onAccent), opacity: submitting ? 0.7 : 1 }}>
-          {submitting ? "⏳ Kaydediliyor..." : "Bu Listeyi Kaydet"}
+        <button onClick={saveRow} disabled={saving || !groupCount || !totalViews} style={{ ...bs(C.amber, C.onAccent), opacity: saving ? 0.7 : 1 }}>
+          {saving ? "⏳ Kaydediliyor..." : "Kaydet"}
         </button>
-        {submitMsg && <div style={{ marginTop: 12, fontSize: 13, color: C.green }}>✅ {submitMsg.created} grup ({submitMsg.bucket}) kaydedildi{submitMsg.failed ? `, ${submitMsg.failed} başarısız` : ""}.</div>}
+        {saveMsg === "ok" && <div style={{ marginTop: 12, fontSize: 13, color: C.green }}>✅ Kaydedildi.</div>}
+        {saveMsg === "error" && <div style={{ marginTop: 12, fontSize: 13, color: C.rust }}>Kaydedilemedi, tekrar dene.</div>}
       </div>
 
       <div style={cardSt({ padding: 24 })}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>Günlük Sonuçlar</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>Günlük Kayıtlar</div>
         {loading && <div style={{ color: C.smoke, fontSize: 13 }}>Yükleniyor...</div>}
-        {!loading && byDay.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Henüz kayıt yok.</div>}
-        {byDay.map(([dateKey, day]) => (
-          <div key={dateKey} style={{ padding: "12px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 8 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>{dateKey}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              {["control", "test"].map(bkt => (
-                <div key={bkt} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <div style={{ fontSize: 12, color: C.smoke }}>
-                    {bkt === "control" ? "Kontrol" : "Test"} · {day[bkt].count} grup
-                    {day[bkt].pending > 0 && <span style={{ color: C.orange }}> · {day[bkt].pending} görüntülenme bekliyor</span>}
-                  </div>
-                  {day[bkt].pending > 0 ? (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <input style={{ ...inpStyle, width: 90, padding: "5px 8px" }} placeholder="toplam görüntülenme" value={bulkViewsInput[`${dateKey}_${bkt}`] || ""} onChange={e => setBulkViewsInput(prev => ({ ...prev, [`${dateKey}_${bkt}`]: e.target.value }))} />
-                      <button onClick={() => bulkSetViews(dateKey, bkt)} style={ob(C.blue)}>Kaydet</button>
-                    </div>
-                  ) : (
-                    <div style={{ fontWeight: 700, fontSize: 13 }}>{day[bkt].views.toLocaleString("tr-TR")}</div>
-                  )}
-                </div>
-              ))}
-            </div>
+        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Henüz kayıt yok.</div>}
+        {rows.map(r => (
+          <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.panel, borderRadius: 8, border: `1px solid ${C.border}`, marginBottom: 8 }}>
+            <div style={{ fontSize: 13 }}><b>{r.log_date}</b> <span style={pill(r.bucket === "control" ? C.smoke : C.green)}>{r.bucket === "control" ? "Kontrol" : "Test"}</span></div>
+            <div style={{ fontSize: 13, color: C.smoke }}>{r.group_count} grup · <b style={{ color: C.ghost }}>{(r.total_views || 0).toLocaleString("tr-TR")}</b> görüntülenme</div>
           </div>
         ))}
       </div>
