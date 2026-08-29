@@ -1435,7 +1435,6 @@ function GlobalActivity() {
     setRows(data);
     setHasMore(data.length === ACTIVITY_PAGE_SIZE);
     setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionFilter, channelFilter, dateFilter]);
   useEffect(() => { load(); }, [load]);
 
