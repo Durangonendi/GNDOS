@@ -883,7 +883,9 @@ function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
       headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
       body: JSON.stringify({ onay_durumu: status }),
     });
-    await writeAudit(token, user, status === "yayinda" ? "listing_approved" : status === "reddedildi" ? "listing_rejected" : "listing_pending", "market_requests", id, null, { onay_durumu: status });
+    const actionName = status === "yayinda" ? "listing_approved" : status === "reddedildi" ? "listing_rejected" : "listing_pending";
+    await writeAudit(token, user, actionName, "market_requests", id, null, { onay_durumu: status });
+    await writeActivity(token, user, { action: actionName, channel: "marketplace", metadata: { market_request_id: id } });
     setRows(prev => prev.map(r => r.id === id ? { ...r, onay_durumu: status } : r));
     setBusyId(null);
   }
@@ -2177,6 +2179,7 @@ function ImportCenter({ user }) {
           duplicate_count: stats.dupeCount, error_count: stats.errorCount, error_rows: stats.errorRows,
         }),
       });
+      await writeActivity(token, user, { action: "imported", channel: "import", metadata: { file_name: fileName, new: stats.newCount, updated: stats.updateCount } });
     }
 
     setResult(stats);
