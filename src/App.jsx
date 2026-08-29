@@ -1577,9 +1577,12 @@ function SendQueue({ user }) {
     const contactId = row.contact_methods?.contacts?.id;
     if (!contactId) { alert("Bu satırda kişi kaydı yok."); return; }
     const token = await authToken();
+    // Cevap geldi / İlgilenmiyor: artık aktif takip beklemediği için follow-up
+    // kuyruğundan otomatik çıksın diye followup_date temizleniyor.
+    const clearsFollowup = !followupDate && (status === "Cevap geldi" || status === "İlgilenmiyor");
     await fetch(`${SUPABASE_URL}/rest/v1/contacts?id=eq.${contactId}`, {
       method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
-      body: JSON.stringify({ status, ...(followupDate ? { followup_date: followupDate } : {}) }),
+      body: JSON.stringify({ status, followup_date: followupDate || (clearsFollowup ? null : undefined) }),
     });
     await logActivity(row, status === "Cevap geldi" ? "replied" : "followup_created", status);
     setRows(prev => prev.filter(r => r.id !== row.id));
