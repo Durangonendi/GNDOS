@@ -272,22 +272,29 @@ const ULKELER = {
   "Güney Asya":["Pakistan","Hindistan","Bangladeş"],
 };
 
-const MODULES = [
-  {key:"crm",icon:"🌍",label:"Global CRM"},
+// Ana operasyon akisina dahil olan, gunluk kullanilan modeuller onde.
+const PRIMARY_MODULES = [
+  {key:"crm",icon:"🌍",label:"Leads/CRM"},
   {key:"companies",icon:"🏢",label:"Companies"},
   {key:"contacts",icon:"👤",label:"Contacts"},
   {key:"campaigns",icon:"📣",label:"Campaigns"},
   {key:"queue",icon:"📤",label:"Send Queue"},
   {key:"import",icon:"📥",label:"Import Center"},
   {key:"marketplace",icon:"🏪",label:"Marketplace/Admin"},
+  {key:"activity",icon:"🕓",label:"Activity"},
+  {key:"ai",icon:"🤖",label:"AI"},
+];
+// Henuz aktif olmayan/ikincil modeuller — silinmedi, "Diger" altina tasindi.
+const SECONDARY_MODULES = [
   {key:"makine",icon:"🏗️",label:"Equipment Center"},
   {key:"stok",icon:"📦",label:"Inventory"},
   {key:"finans",icon:"💰",label:"Finance"},
   {key:"analiz",icon:"📊",label:"Intelligence"},
-  {key:"ai",icon:"🤖",label:"AI Copilot"},
   {key:"teklif",icon:"📄",label:"Proposal Center"},
   {key:"dokuman",icon:"📁",label:"Knowledge Base"},
+  {key:"settings",icon:"⚙️",label:"Settings"},
 ];
+const MODULES = [...PRIMARY_MODULES, ...SECONDARY_MODULES];
 
 const fmt = n => n>=1000000?`$${(n/1e6).toFixed(2)}M`:n>=1000?`$${(n/1000).toFixed(0)}K`:`$${n}`;
 const today = () => new Date().toISOString().split("T")[0];
@@ -1388,6 +1395,74 @@ function ContactsModul({ user }) {
         </div>
       )}
       {companyDetailId && <CompanyDetail companyId={companyDetailId} onClose={() => setCompanyDetailId(null)} user={user} />}
+    </div>
+  );
+}
+
+// ─── ACTIVITY (Faz 10 — tum sistemdeki son islemler, tek ekranda) ─────────────
+const ACTIVITY_ACTION_LABEL = {
+  company_created: "Firma oluşturuldu", contact_created: "Kişi oluşturuldu", imported: "İçe aktarma",
+  whatsapp_sent: "WhatsApp gönderildi", email_sent: "E-posta gönderildi", skipped: "Atlandı",
+  replied: "Cevap geldi", followup_created: "Takip belirlendi", lead_created: "Lead oluşturuldu",
+  lead_stage_changed: "Lead durumu değişti", note_added: "Not eklendi",
+  listing_approved: "İlan onaylandı", listing_rejected: "İlan reddedildi", listing_pending: "İlan beklemeye alındı",
+};
+
+function GlobalActivity() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [actionFilter, setActionFilter] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const token = await authToken();
+    if (!token) { setLoading(false); return; }
+    let url = `${SUPABASE_URL}/rest/v1/activity_log?select=*,companies(name_original)&order=occurred_at.desc&limit=200`;
+    if (actionFilter) url += `&action=eq.${actionFilter}`;
+    const res = await fetch(url, { headers: authHeaders(token) });
+    setRows(res.ok ? await res.json() : []);
+    setLoading(false);
+  }, [actionFilter]);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      <div style={cardSt({ padding: 20, marginBottom: 16 })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 12 }}>🕓 Sistem Aktivite Akışı</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select style={{ ...inpStyle, width: 220, cursor: "pointer" }} value={actionFilter} onChange={e => setActionFilter(e.target.value)}>
+            <option value="">Tüm işlem türleri</option>
+            {Object.entries(ACTIVITY_ACTION_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <button onClick={load} style={ob(C.blue)}>🔄 Yenile</button>
+        </div>
+      </div>
+      <div style={cardSt({ padding: 20 })}>
+        {loading && <div style={{ color: C.smoke }}>⏳ Yükleniyor...</div>}
+        {!loading && rows.length === 0 && <div style={{ color: C.smoke, fontSize: 13 }}>Kayıt yok.</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rows.map(a => (
+            <div key={a.id} style={{ display: "flex", gap: 10, padding: "9px 12px", background: C.panel, borderRadius: 6, border: `1px solid ${C.border}`, alignItems: "center" }}>
+              <span style={{ fontSize: 11, color: C.smoke, minWidth: 130 }}>{new Date(a.occurred_at).toLocaleString("tr-TR")}</span>
+              <span style={{ fontSize: 12, flex: 1 }}><b>{ACTIVITY_ACTION_LABEL[a.action] || a.action}</b>{a.companies?.name_original ? ` · ${a.companies.name_original}` : ""}{a.channel ? ` · ${a.channel}` : ""}{a.result ? ` (${a.result})` : ""}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SETTINGS ──────────────────────────────────────────────────────────────────
+function SettingsPanel({ user, onLogout }) {
+  return (
+    <div style={cardSt({ padding: 24, maxWidth: 480 })}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 16 }}>⚙️ Hesap</div>
+      <div style={{ fontSize: 11, color: C.smoke, marginBottom: 4 }}>E-POSTA</div>
+      <div style={{ fontSize: 14, marginBottom: 16 }}>{user?.email || "—"}</div>
+      <div style={{ fontSize: 11, color: C.smoke, marginBottom: 4 }}>KULLANICI ID</div>
+      <div style={{ fontSize: 12, color: C.smoke, marginBottom: 20, wordBreak: "break-all" }}>{user?.id || "—"}</div>
+      <button onClick={onLogout} style={ob(C.rust)}>Çıkış Yap</button>
     </div>
   );
 }
@@ -2545,6 +2620,7 @@ function SimpleModule({title, content}) {
 export default function GNDOS() {
   const [session, setSessionState] = useState(()=>getSession());
   const [active, setActive] = useState("home");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(false);
   const loggedIn = !!session;
@@ -2579,11 +2655,25 @@ export default function GNDOS() {
           <img src="/logo.png" alt="GND" style={{height:30}}/>
         </button>
         <div style={{display:"flex",gap:0,flex:1,overflowX:"auto"}}>
-          {MODULES.map(m=>(
+          {PRIMARY_MODULES.map(m=>(
             <button key={m.key} onClick={()=>setActive(m.key)} style={{background:active===m.key?C.amberDim:"transparent",color:active===m.key?C.amber:C.smoke,border:"none",borderBottom:active===m.key?`2px solid ${C.amber}`:"2px solid transparent",padding:"0 12px",height:54,cursor:"pointer",fontSize:12,fontWeight:active===m.key?700:400,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}>
               <span>{m.icon}</span><span>{m.label}</span>
             </button>
           ))}
+          <div style={{position:"relative"}} onMouseLeave={()=>setMoreOpen(false)}>
+            <button onClick={()=>setMoreOpen(o=>!o)} style={{background:SECONDARY_MODULES.some(m=>m.key===active)?C.amberDim:"transparent",color:SECONDARY_MODULES.some(m=>m.key===active)?C.amber:C.smoke,border:"none",borderBottom:SECONDARY_MODULES.some(m=>m.key===active)?`2px solid ${C.amber}`:"2px solid transparent",padding:"0 12px",height:54,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}>
+              <span>⋯</span><span>Diğer</span>
+            </button>
+            {moreOpen && (
+              <div style={{position:"absolute",top:54,left:0,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.15)",zIndex:60,minWidth:200,overflow:"hidden"}}>
+                {SECONDARY_MODULES.map(m=>(
+                  <button key={m.key} onClick={()=>{setActive(m.key);setMoreOpen(false);}} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"10px 14px",background:active===m.key?C.amberDim:"transparent",color:active===m.key?C.amber:C.ghost,border:"none",cursor:"pointer",fontSize:13,textAlign:"left"}}>
+                    <span>{m.icon}</span><span>{m.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6,paddingLeft:16,borderLeft:`1px solid ${C.border}`,flexShrink:0}}>
           <div style={{width:7,height:7,borderRadius:"50%",background:C.green}}/>
@@ -2601,6 +2691,8 @@ export default function GNDOS() {
         {active==="campaigns"&&<CampaignCenter/>}
         {active==="queue"&&<SendQueue user={user}/>}
         {active==="marketplace"&&<MarketplaceAdmin user={user}/>}
+        {active==="activity"&&<GlobalActivity/>}
+        {active==="settings"&&<SettingsPanel user={user} onLogout={handleLogout}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
