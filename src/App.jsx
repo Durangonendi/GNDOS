@@ -927,55 +927,267 @@ function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
 // ─── COMPANIES (Faz 1/3 — server-side sayfalama + Activity Log timeline) ──────
 const PAGE_SIZE = 30;
 
-function CompanyDetail({ companyId, onClose }) {
+const FOLLOWUP_STATUSES = ["Cevap bekleniyor","Cevap geldi","İlgileniyor","Teklif istedi","Tekrar ara","Tekrar yaz","İlgilenmiyor","Yanlış iletişim","Satış fırsatı","Kapatıldı"];
+const CD_TABS = [
+  ["bilgiler","📋 Bilgiler"],["kisiler","👤 Kişiler"],["leads","🎯 Leads"],
+  ["kampanyalar","📣 Kampanyalar"],["gonderim","📤 Gönderim Geçmişi"],["aktivite","🕓 Aktivite"],
+  ["marketplace","🏪 Marketplace"],["ilanlar","📢 İlanları"],["teklifler","📄 Teklifler"],["notlar","📝 Notlar"],
+];
+
+function CompanyDetail({ companyId, onClose, user }) {
   const [company, setCompany] = useState(null);
   const [methods, setMethods] = useState([]);
+  const [contactsList, setContactsList] = useState([]);
+  const [leadsList, setLeadsList] = useState([]);
+  const [campaignTargets, setCampaignTargets] = useState([]);
+  const [outbound, setOutbound] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [mpEvents, setMpEvents] = useState([]);
+  const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("bilgiler");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [followupDate, setFollowupDate] = useState("");
+  const [followupStatus, setFollowupStatus] = useState(FOLLOWUP_STATUSES[0]);
+  const [savingFollowup, setSavingFollowup] = useState(false);
+  const [campaignsList, setCampaignsList] = useState([]);
+  const [addToCampaignId, setAddToCampaignId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setLoading(true);
       const token = await authToken();
       if (!token) return;
       const h = authHeaders(token);
-      const [cRes, mRes, aRes] = await Promise.all([
+      const [cRes, mRes, conRes, lRes, ctRes, aRes, meRes, campRes] = await Promise.all([
         fetch(`${SUPABASE_URL}/rest/v1/companies?id=eq.${companyId}&select=*`, { headers: h }),
         fetch(`${SUPABASE_URL}/rest/v1/contact_methods?company_id=eq.${companyId}&select=*`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/contacts?company_id=eq.${companyId}&select=*`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/leads?company_id=eq.${companyId}&select=*&order=id.desc`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/campaign_targets?company_id=eq.${companyId}&select=*,campaigns(name,channel,status)`, { headers: h }),
         fetch(`${SUPABASE_URL}/rest/v1/activity_log?company_id=eq.${companyId}&select=*&order=occurred_at.desc&limit=50`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/marketplace_events?company_id=eq.${companyId}&select=*&order=occurred_at.desc&limit=50`, { headers: h }),
+        fetch(`${SUPABASE_URL}/rest/v1/campaigns?select=id,name,channel&status=eq.draft&order=id.desc`, { headers: h }),
       ]);
-      const [c, m, a] = await Promise.all([cRes.json(), mRes.json(), aRes.json()]);
-      if (!cancelled) { setCompany(c[0]); setMethods(m); setActivity(a); setLoading(false); }
+      const [c, m, con, l, ct, a, me, camp] = await Promise.all([cRes.json(), mRes.json(), conRes.json(), lRes.json(), ctRes.json(), aRes.json(), meRes.json(), campRes.json()]);
+      if (cancelled) return;
+      setCompany(c[0]); setMethods(m); setContactsList(con); setLeadsList(l);
+      setCampaignTargets(Array.isArray(ct) ? ct : []); setActivity(a); setMpEvents(Array.isArray(me) ? me : []);
+      setCampaignsList(Array.isArray(camp) ? camp : []);
+      setNoteDraft(c[0]?.notes || "");
+      if (con[0]) { setFollowupDate(con[0].followup_date || ""); setFollowupStatus(con[0].status || FOLLOWUP_STATUSES[0]); }
+
+      // Kişinin gönderim geçmişi: bu firmanın iletişim yöntemlerine giden mesajlar
+      const methodIds = m.map(x => x.id);
+      if (methodIds.length) {
+        const obRes = await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages?contact_method_id=in.(${methodIds.join(",")})&select=*&order=id.desc&limit=50`, { headers: h });
+        setOutbound(obRes.ok ? await obRes.json() : []);
+      }
+      // Bu firmanın pazar yeri ilanları: telefon eşleşmesiyle (best-effort)
+      try {
+        const phones = m.filter(x => x.type === "phone" || x.type === "whatsapp").map(x => x.value_normalized);
+        if (phones.length) {
+          const mrRes = await fetch(`${SUPABASE_URL}/rest/v1/market_requests?select=id,baslik,onay_durumu,fiyat,created_at,telefon&order=created_at.desc&limit=500`, { headers: h });
+          if (mrRes.ok) {
+            const mrData = await mrRes.json();
+            setListings(mrData.filter(r => phones.includes(normalizePhone(r.telefon))));
+          }
+        }
+      } catch (e) { /* market_requests erişimi yoksa sessizce geç */ }
+      setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [companyId]);
 
+  async function saveNote() {
+    setSavingNote(true);
+    const token = await authToken();
+    await fetch(`${SUPABASE_URL}/rest/v1/companies?id=eq.${companyId}`, {
+      method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ notes: noteDraft }),
+    });
+    await writeAudit(token, user, "note_added", "companies", companyId, { notes: company?.notes }, { notes: noteDraft });
+    await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
+      method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ company_id: companyId, action: "note_added", actor_user_id: user?.id || null }),
+    });
+    setCompany(c => ({ ...c, notes: noteDraft }));
+    setSavingNote(false);
+  }
+
+  async function saveFollowup() {
+    if (!contactsList[0]) return;
+    setSavingFollowup(true);
+    const token = await authToken();
+    await fetch(`${SUPABASE_URL}/rest/v1/contacts?id=eq.${contactsList[0].id}`, {
+      method: "PATCH", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ followup_date: followupDate || null, status: followupStatus }),
+    });
+    await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
+      method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ company_id: companyId, contact_id: contactsList[0].id, action: "followup_created", actor_user_id: user?.id || null, metadata: { followup_date: followupDate, status: followupStatus } }),
+    });
+    setContactsList(prev => prev.map((c,i) => i===0 ? { ...c, followup_date: followupDate, status: followupStatus } : c));
+    setSavingFollowup(false);
+  }
+
+  async function addToCampaign() {
+    if (!addToCampaignId) return;
+    const campaign = campaignsList.find(c => String(c.id) === String(addToCampaignId));
+    if (!campaign) return;
+    const method = methods.find(m => m.type === campaign.channel);
+    if (!method) { alert(`Bu firmanın ${campaign.channel} bilgisi yok.`); return; }
+    const token = await authToken();
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/campaign_targets`, {
+      method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation,resolution=ignore-duplicates" },
+      body: JSON.stringify({ campaign_id: campaign.id, contact_method_id: method.id, company_id: companyId }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const target = data[0];
+      if (target) {
+        await fetch(`${SUPABASE_URL}/rest/v1/outbound_messages`, {
+          method: "POST", headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal,resolution=ignore-duplicates" },
+          body: JSON.stringify({ campaign_target_id: target.id, contact_method_id: method.id, channel: campaign.channel, idempotency_key: `ct_${target.id}_initial`, status: "queued" }),
+        });
+      }
+      alert("Kampanyaya eklendi.");
+    }
+  }
+
+  function openWhatsapp() {
+    const m = methods.find(x => x.type === "whatsapp") || methods.find(x => x.type === "phone");
+    if (!m) return;
+    window.open(`https://wa.me/${(m.value_normalized || "").replace(/\D/g,"")}`, "_blank");
+  }
+  function openMail() {
+    const m = methods.find(x => x.type === "email");
+    if (!m) return;
+    window.open(`mailto:${m.value_original}`, "_blank");
+  }
+
+  const tabCount = {
+    kisiler: contactsList.length, leads: leadsList.length, kampanyalar: campaignTargets.length,
+    gonderim: outbound.length, aktivite: activity.length, marketplace: mpEvents.length, ilanlar: listings.length,
+  };
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{...cardSt({padding:28}),width:"100%",maxWidth:600,maxHeight:"88vh",overflowY:"auto"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-          <div style={{fontSize:19,fontWeight:800,color:C.amber}}>{loading ? "Yükleniyor..." : company?.name_original}</div>
-          <button onClick={onClose} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:22}}>✕</button>
+      <div style={{...cardSt({padding:0}),width:"100%",maxWidth:800,maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div style={{padding:"20px 24px 0"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+            <div>
+              <div style={{fontSize:19,fontWeight:800,color:C.amber}}>{loading ? "Yükleniyor..." : company?.name_original}</div>
+              {!loading && company && <div style={{fontSize:12,color:C.smoke,marginTop:2}}>{[company.country,company.city||company.region,company.sector].filter(Boolean).join(" · ")}</div>}
+            </div>
+            <button onClick={onClose} style={{background:"none",border:"none",color:C.smoke,cursor:"pointer",fontSize:22}}>✕</button>
+          </div>
+          {!loading && company && (
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+              {methods.some(m=>m.type==="whatsapp"||m.type==="phone") && <button onClick={openWhatsapp} style={bs("#25D366",C.onAccent)}>💬 WhatsApp Aç</button>}
+              {methods.some(m=>m.type==="email") && <button onClick={openMail} style={bs(C.blue,C.onAccent)}>✉ Mail Aç</button>}
+              <select style={{...inpStyle,width:"auto"}} value={addToCampaignId} onChange={e=>setAddToCampaignId(e.target.value)}>
+                <option value="">Kampanyaya ekle...</option>
+                {campaignsList.map(c => <option key={c.id} value={c.id}>{c.name} ({c.channel})</option>)}
+              </select>
+              {addToCampaignId && <button onClick={addToCampaign} style={ob(C.amber)}>+ Ekle</button>}
+            </div>
+          )}
+          <div style={{display:"flex",gap:2,overflowX:"auto",borderBottom:`1px solid ${C.border}`}}>
+            {CD_TABS.map(([key,label]) => (
+              <button key={key} onClick={()=>setTab(key)} style={{background:"none",border:"none",borderBottom:tab===key?`2px solid ${C.amber}`:"2px solid transparent",color:tab===key?C.amber:C.smoke,padding:"8px 12px",fontSize:12,fontWeight:tab===key?700:400,cursor:"pointer",whiteSpace:"nowrap"}}>
+                {label}{tabCount[key]>0?` (${tabCount[key]})`:""}
+              </button>
+            ))}
+          </div>
         </div>
-        {!loading && company && (
-          <>
-            <div style={{fontSize:12,color:C.smoke,marginBottom:16}}>{company.country} · {company.region} · {company.sector}</div>
-            <div style={{fontSize:11,color:C.smoke,marginBottom:8,fontWeight:700}}>İLETİŞİM YÖNTEMLERİ</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}}>
-              {methods.length === 0 && <span style={{fontSize:12,color:C.smoke}}>Kayıt yok</span>}
-              {methods.map(m => (
-                <span key={m.id} style={pill(m.type==="email"?C.blue:C.green)}>{m.type}: {m.value_original}</span>
+
+        <div style={{padding:"18px 24px 24px",overflowY:"auto",flex:1}}>
+          {loading && <div style={{color:C.smoke}}>⏳ Yükleniyor...</div>}
+          {!loading && company && tab==="bilgiler" && (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,fontSize:13}}>
+              {[
+                ["Firma Adı",company.name_original],["Ülke",company.country],["Şehir",company.city],["Bölge",company.region],
+                ["Sektör",company.sector],["Alt Sektör",company.sub_sector],["Firma Tipi",company.company_type],
+                ["Website",company.website],["Adres",company.address],["Kaynak",company.data_source],
+                ["Doğrulama",company.verification_status],["Kayıt Tarihi",company.created_at?new Date(company.created_at).toLocaleDateString("tr-TR"):"—"],
+              ].map(([l,v]) => (
+                <div key={l}><div style={{fontSize:10,color:C.smoke,marginBottom:2}}>{l.toUpperCase()}</div><div>{v || "—"}</div></div>
+              ))}
+              <div style={{gridColumn:"1/-1",marginTop:8}}>
+                <div style={{fontSize:11,color:C.smoke,marginBottom:8,fontWeight:700}}>İLETİŞİM YÖNTEMLERİ</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {methods.length === 0 && <span style={{fontSize:12,color:C.smoke}}>Kayıt yok</span>}
+                  {methods.map(m => <span key={m.id} style={pill(m.type==="email"?C.blue:m.type==="whatsapp"?C.green:C.smoke)}>{m.type}: {m.value_original}</span>)}
+                </div>
+              </div>
+              <div style={{gridColumn:"1/-1",marginTop:12,background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:14}}>
+                <div style={{fontSize:11,color:C.smoke,marginBottom:8,fontWeight:700}}>TAKİP TARİHİ BELİRLE</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <input type="date" style={{...inpStyle,width:150}} value={followupDate} onChange={e=>setFollowupDate(e.target.value)}/>
+                  <select style={{...inpStyle,width:170}} value={followupStatus} onChange={e=>setFollowupStatus(e.target.value)}>
+                    {FOLLOWUP_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <button onClick={saveFollowup} disabled={savingFollowup || !contactsList[0]} style={bs(C.amber,C.onAccent)}>{savingFollowup?"...":"Kaydet"}</button>
+                  {!contactsList[0] && <span style={{fontSize:11,color:C.smoke}}>Önce bir kişi kaydı gerekiyor</span>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!loading && tab==="kisiler" && (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {contactsList.length===0 && <div style={{color:C.smoke,fontSize:13}}>Kayıtlı kişi yok.</div>}
+              {contactsList.map(c => (
+                <div key={c.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:12}}>
+                  <div style={{fontWeight:700,fontSize:13}}>{c.person_name || "(isimsiz kişi)"}</div>
+                  <div style={{fontSize:12,color:C.smoke,marginTop:4}}>Durum: {c.status || "—"} · Son iletişim: {c.last_contact_at?new Date(c.last_contact_at).toLocaleDateString("tr-TR"):"—"} · Takip: {c.followup_date || "—"}</div>
+                </div>
               ))}
             </div>
-            {company.notes && (
-              <div style={{marginBottom:18}}>
-                <div style={{fontSize:11,color:C.smoke,marginBottom:6,fontWeight:700}}>NOTLAR</div>
-                <div style={{background:C.navy,borderRadius:6,padding:"8px 12px",fontSize:13}}>{company.notes}</div>
-              </div>
-            )}
-            <div style={{fontSize:11,color:C.smoke,marginBottom:8,fontWeight:700}}>İLETİŞİM GEÇMİŞİ (ACTIVITY LOG)</div>
-            {activity.length === 0 && <div style={{fontSize:12,color:C.smoke,padding:"12px 0"}}>Henüz kayıtlı bir işlem yok.</div>}
+          )}
+
+          {!loading && tab==="leads" && (
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {leadsList.length===0 && <div style={{color:C.smoke,fontSize:13}}>Bu firmaya ait lead yok.</div>}
+              {leadsList.map(l => (
+                <div key={l.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:12,display:"flex",justifyContent:"space-between"}}>
+                  <div><b>{l.product || "—"}</b><div style={{fontSize:11,color:C.smoke}}>{l.product_type}</div></div>
+                  <div style={{textAlign:"right"}}><span style={pill(SC[l.stage]||C.smoke)}>{l.stage}</span><div style={{fontSize:11,color:C.smoke,marginTop:4}}>{fmt(Number(l.value)||0)}</div></div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && tab==="kampanyalar" && (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {campaignTargets.length===0 && <div style={{color:C.smoke,fontSize:13}}>Herhangi bir kampanyaya eklenmemiş.</div>}
+              {campaignTargets.map(ct => (
+                <div key={ct.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:12,display:"flex",justifyContent:"space-between"}}>
+                  <b>{ct.campaigns?.name || "—"}</b>
+                  <span style={pill(ct.campaigns?.status==="active"?C.green:C.smoke)}>{ct.campaigns?.channel} · {ct.campaigns?.status}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && tab==="gonderim" && (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {outbound.length===0 && <div style={{color:C.smoke,fontSize:13}}>Gönderim geçmişi yok.</div>}
+              {outbound.map(o => (
+                <div key={o.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:12,display:"flex",justifyContent:"space-between"}}>
+                  <span>{o.channel} · {o.sequence_step}</span>
+                  <span style={pill(o.status==="sent"?C.green:o.status==="failed"?C.rust:C.smoke)}>{o.status}{o.sent_at?" · "+new Date(o.sent_at).toLocaleDateString("tr-TR"):""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && tab==="aktivite" && (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {activity.length===0 && <div style={{color:C.smoke,fontSize:13}}>Henüz kayıtlı bir işlem yok.</div>}
               {activity.map(a => (
                 <div key={a.id} style={{display:"flex",gap:10,padding:"9px 12px",background:C.panel,borderRadius:6,border:`1px solid ${C.border}`}}>
                   <span style={{fontSize:11,color:C.smoke,minWidth:110}}>{new Date(a.occurred_at).toLocaleString("tr-TR")}</span>
@@ -983,14 +1195,49 @@ function CompanyDetail({ companyId, onClose }) {
                 </div>
               ))}
             </div>
-          </>
-        )}
+          )}
+
+          {!loading && tab==="marketplace" && (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {mpEvents.length===0 && <div style={{color:C.smoke,fontSize:13}}>Marketplace hareketi yok.</div>}
+              {mpEvents.map(e => (
+                <div key={e.id} style={{display:"flex",gap:10,padding:"9px 12px",background:C.panel,borderRadius:6,border:`1px solid ${C.border}`}}>
+                  <span style={{fontSize:11,color:C.smoke,minWidth:110}}>{new Date(e.occurred_at).toLocaleString("tr-TR")}</span>
+                  <span style={{fontSize:12}}>{e.event_type}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && tab==="ilanlar" && (
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {listings.length===0 && <div style={{color:C.smoke,fontSize:13}}>Bu firmaya (telefon eşleşmesiyle) bağlı pazar yeri ilanı bulunamadı.</div>}
+              {listings.map(l => (
+                <div key={l.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:12,display:"flex",justifyContent:"space-between"}}>
+                  <b>{l.baslik}</b>
+                  <span style={pill(l.onay_durumu==="yayinda"?C.green:l.onay_durumu==="reddedildi"?C.rust:C.amber)}>{l.onay_durumu||"bekliyor"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!loading && tab==="teklifler" && (
+            <div style={{color:C.smoke,fontSize:13}}>Teklif Merkezi henüz aktif değil — bu firmaya ait teklif geçmişi burada görünecek.</div>
+          )}
+
+          {!loading && tab==="notlar" && (
+            <div>
+              <textarea style={{...inpStyle,minHeight:120,resize:"vertical"}} value={noteDraft} onChange={e=>setNoteDraft(e.target.value)} placeholder="Bu firma hakkında not ekle..."/>
+              <button onClick={saveNote} disabled={savingNote} style={{...bs(C.amber,C.onAccent),marginTop:10}}>{savingNote?"⏳ Kaydediliyor...":"💾 Notu Kaydet"}</button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function CompaniesModul() {
+function CompaniesModul({ user }) {
   const [rowsData, setRowsData] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -1043,7 +1290,7 @@ function CompaniesModul() {
           </table>
         </div>
       )}
-      {detailId && <CompanyDetail companyId={detailId} onClose={()=>setDetailId(null)}/>}
+      {detailId && <CompanyDetail companyId={detailId} onClose={()=>setDetailId(null)} user={user}/>}
     </div>
   );
 }
@@ -1857,7 +2104,7 @@ export default function GNDOS() {
         {active==="home"&&<CommandCenter leads={leads} setActive={setActive} loadLeads={loadLeads}/>}
         {active==="crm"&&<CRMModul leads={leads} loadLeads={loadLeads} user={user}/>}
         {active==="import"&&<ImportCenter user={user}/>}
-        {active==="companies"&&<CompaniesModul/>}
+        {active==="companies"&&<CompaniesModul user={user}/>}
         {active==="campaigns"&&<CampaignCenter/>}
         {active==="queue"&&<SendQueue user={user}/>}
         {active==="marketplace"&&<MarketplaceAdmin user={user}/>}
