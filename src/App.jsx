@@ -239,6 +239,7 @@ const MODULES = [
   {key:"campaigns",icon:"📣",label:"Campaigns"},
   {key:"queue",icon:"📤",label:"Send Queue"},
   {key:"import",icon:"📥",label:"Import Center"},
+  {key:"marketplace",icon:"🏪",label:"Marketplace/Admin"},
   {key:"makine",icon:"🏗️",label:"Equipment Center"},
   {key:"stok",icon:"📦",label:"Inventory"},
   {key:"finans",icon:"💰",label:"Finance"},
@@ -650,6 +651,248 @@ function FirmaBul({ onAdd }) {
         </div>
       )}
       {!loading&&firmalar.length===0&&<div style={{textAlign:"center",padding:60,color:C.smoke}}><div style={{fontSize:48,marginBottom:12}}>🔍</div><div>Bölge + sektör seç, Firma Ara'ya bas</div></div>}
+    </div>
+  );
+}
+
+// ─── MARKETPLACE / İLAN ONAY MERKEZİ ──────────────────────────────────────────
+// gndmachinery.com'daki market_requests tablosu üzerinde çalışır (ayrı bir
+// tüketici pazar yeri — GND OS'un B2B firma/lead sisteminden bağımsız).
+// Not: bu tabloya erişim, Supabase'de sadece belirli bir email'e (site admini)
+// tanımlı RLS policy ile kısıtlı — GNDOS'a o email ile giriş yapılmış olmalı.
+const MR_KATEGORI_LABEL = { makine: "Makine", atasman: "Ataşman", parca: "Yedek Parça" };
+
+async function marketRequestToLead(row, user, token, setNote) {
+  const phoneNorm = normalizePhone(row.telefon);
+  let companyId = null, contactId = null;
+
+  if (phoneNorm) {
+    const mRes = await fetch(`${SUPABASE_URL}/rest/v1/contact_methods?value_normalized=eq.${encodeURIComponent(phoneNorm)}&select=company_id,contact_id&limit=1`, { headers: authHeaders(token) });
+    const mData = await mRes.json();
+    if (Array.isArray(mData) && mData.length) { companyId = mData[0].company_id; contactId = mData[0].contact_id; }
+  }
+
+  if (!companyId) {
+    const name = row.ad_soyad || row.baslik || "Pazar Yeri İlanı";
+    const cRes = await fetch(`${SUPABASE_URL}/rest/v1/companies`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify({ name_original: name, name_searchable: nameSearchable(name), data_source: "marketplace_listing", verification_status: "unverified", owner_user_id: user?.id || null, notes: `Pazar yeri ilanından otomatik oluşturuldu (ilan: ${row.baslik || row.id})` }),
+    });
+    const cData = await cRes.json();
+    if (!cRes.ok) throw new Error(JSON.stringify(cData));
+    companyId = cData[0].id;
+
+    const conRes = await fetch(`${SUPABASE_URL}/rest/v1/contacts`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+      body: JSON.stringify({ company_id: companyId, person_name: row.ad_soyad || null, status: "Gönderilmedi" }),
+    });
+    const conData = await conRes.json();
+    if (conRes.ok) contactId = conData[0].id;
+
+    if (phoneNorm) {
+      await fetch(`${SUPABASE_URL}/rest/v1/contact_methods`, {
+        method: "POST",
+        headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+        body: JSON.stringify({ company_id: companyId, contact_id: contactId, type: "phone", value_original: row.telefon, value_normalized: phoneNorm, is_primary: true }),
+      });
+    }
+  }
+
+  const value = Number(String(row.fiyat || "").replace(/[^\d.]/g, "")) || 0;
+  const leadBody = {
+    company: row.ad_soyad || row.baslik, contact: row.ad_soyad || "", country: "Türkiye", region: "Türkiye",
+    sector: MR_KATEGORI_LABEL[row.kategori] || "Diğer", product_type: row.islem_turu === "satis" ? "İkinci El Makine" : "Yeni Makine",
+    product: row.baslik || "", value, stage: "Lead", phone: row.telefon || "", whatsapp: row.telefon || "", email: "",
+    notes: `Pazar yeri ilanı #${row.id} üzerinden oluşturuldu.${row.aciklama ? " Açıklama: " + row.aciklama : ""}`,
+    company_id: companyId, contact_id: contactId,
+  };
+  const lRes = await fetch(`${SUPABASE_URL}/rest/v1/leads`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=representation" },
+    body: JSON.stringify(leadBody),
+  });
+  const lData = await lRes.json();
+  if (!lRes.ok) throw new Error(JSON.stringify(lData));
+
+  await writeAudit(token, user, "lead_created", "leads", lData[0]?.id, null, { source: "marketplace_listing", market_request_id: row.id });
+  await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
+    method: "POST",
+    headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+    body: JSON.stringify({ company_id: companyId, contact_id: contactId, action: "lead_created", channel: "marketplace", result: "ok", actor_user_id: user?.id || null, metadata: { market_request_id: row.id } }),
+  });
+  return companyId;
+}
+
+function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [statusFilter, setStatusFilter] = useState("bekleyen");
+  const [kategoriFilter, setKategoriFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [busyId, setBusyId] = useState(null);
+  const [convertedIds, setConvertedIds] = useState([]);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErrorMsg("");
+    const token = await authToken();
+    if (!token) { setLoading(false); return; }
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/market_requests?select=*&order=created_at.desc&limit=500`, { headers: authHeaders(token) });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setErrorMsg(err.message || "Yüklenemedi — bu ekrana sadece site yöneticisi email'i erişebiliyor.");
+      setRows([]); setLoading(false); return;
+    }
+    setRows(await res.json());
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = rows.filter(r => {
+    if (statusFilter === "bekleyen" && (r.onay_durumu === "yayinda" || r.onay_durumu === "reddedildi")) return false;
+    if (statusFilter === "yayinda" && r.onay_durumu !== "yayinda") return false;
+    if (statusFilter === "reddedildi" && r.onay_durumu !== "reddedildi") return false;
+    if (kategoriFilter && r.kategori !== kategoriFilter) return false;
+    if (search.trim()) {
+      const s = search.toLowerCase();
+      if (!`${r.baslik} ${r.ad_soyad} ${r.telefon}`.toLowerCase().includes(s)) return false;
+    }
+    return true;
+  });
+
+  async function setStatus(id, status) {
+    setBusyId(id);
+    const token = await authToken();
+    await fetch(`${SUPABASE_URL}/rest/v1/market_requests?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify({ onay_durumu: status }),
+    });
+    await writeAudit(token, user, status === "yayinda" ? "listing_approved" : status === "reddedildi" ? "listing_rejected" : "listing_pending", "market_requests", id, null, { onay_durumu: status });
+    setRows(prev => prev.map(r => r.id === id ? { ...r, onay_durumu: status } : r));
+    setBusyId(null);
+  }
+
+  function startEdit(r) {
+    setEditingId(r.id);
+    setEditForm({ baslik: r.baslik || "", fiyat: r.fiyat || "", aciklama: r.aciklama || "", kategori: r.kategori || "", alt_kategori: r.alt_kategori || "" });
+  }
+
+  async function saveEdit(id) {
+    setBusyId(id);
+    const token = await authToken();
+    await fetch(`${SUPABASE_URL}/rest/v1/market_requests?id=eq.${id}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+      body: JSON.stringify(editForm),
+    });
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...editForm } : r));
+    setEditingId(null);
+    setBusyId(null);
+  }
+
+  async function convertToLead(row) {
+    setBusyId(row.id);
+    const token = await authToken();
+    try {
+      await marketRequestToLead(row, user, token);
+      setConvertedIds(prev => [...prev, row.id]);
+    } catch (e) { alert("Lead oluşturulamadı: " + e.message); }
+    setBusyId(null);
+  }
+
+  const counts = {
+    bekleyen: rows.filter(r => r.onay_durumu !== "yayinda" && r.onay_durumu !== "reddedildi").length,
+    yayinda: rows.filter(r => r.onay_durumu === "yayinda").length,
+    reddedildi: rows.filter(r => r.onay_durumu === "reddedildi").length,
+  };
+
+  return (
+    <div>
+      <div style={cardSt({ padding: 20, marginBottom: 16 })}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber, marginBottom: 14 }}>🏪 Pazar Yeri İlan Onay Merkezi</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {[["bekleyen", `Bekleyen (${counts.bekleyen})`], ["yayinda", `Yayında (${counts.yayinda})`], ["reddedildi", `Reddedilen (${counts.reddedildi})`], ["", "Tümü"]].map(([v, l]) => (
+            <button key={v || "all"} onClick={() => setStatusFilter(v)} style={statusFilter === v ? bs(C.amber, C.onAccent) : ob(C.smoke)}>{l}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input style={{ ...inpStyle, width: 220 }} placeholder="🔍 Başlık/isim/telefon ara..." value={search} onChange={e => setSearch(e.target.value)} />
+          <select style={{ ...inpStyle, width: 160, cursor: "pointer" }} value={kategoriFilter} onChange={e => setKategoriFilter(e.target.value)}>
+            <option value="">Tüm kategoriler</option>
+            <option value="makine">Makine</option>
+            <option value="atasman">Ataşman</option>
+            <option value="parca">Yedek Parça</option>
+          </select>
+          <button onClick={load} style={ob(C.blue)}>🔄 Yenile</button>
+        </div>
+      </div>
+
+      {errorMsg && <div style={{ ...cardSt({ padding: 16 }), color: C.rust, marginBottom: 16 }}>{errorMsg}</div>}
+      {loading && <div style={{ color: C.smoke }}>⏳ Yükleniyor...</div>}
+      {!loading && !errorMsg && filtered.length === 0 && <div style={{ color: C.smoke, padding: 20 }}>Bu filtrede ilan yok.</div>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {filtered.map(r => (
+          <div key={r.id} style={cardSt({ padding: 16 })}>
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+              <div>
+                <b style={{ fontSize: 14 }}>{r.baslik || "(başlıksız)"}</b>{" "}
+                <span style={pill(r.onay_durumu === "yayinda" ? C.green : r.onay_durumu === "reddedildi" ? C.rust : C.amber)}>
+                  {r.onay_durumu === "yayinda" ? "Yayında" : r.onay_durumu === "reddedildi" ? "Reddedildi" : "Bekliyor"}
+                </span>
+              </div>
+              <span style={{ fontSize: 11, color: C.smoke }}>{r.created_at ? new Date(r.created_at).toLocaleDateString("tr-TR") : ""}</span>
+            </div>
+            <div style={{ fontSize: 12, color: C.smoke, marginBottom: 6 }}>
+              {r.islem_turu === "satis" ? "Satış" : "Alım Talebi"} · {MR_KATEGORI_LABEL[r.kategori] || "Kategori yok"}{r.alt_kategori ? ` (${r.alt_kategori})` : ""}
+              {r.fiyat ? ` · ${r.fiyat}` : ""}{r.durum_bilgisi ? ` · ${r.durum_bilgisi}` : ""}
+            </div>
+            <div style={{ fontSize: 12, marginBottom: 8 }}><b>Kişi:</b> {r.ad_soyad || "—"} · <b>Tel:</b> {r.telefon || "—"}</div>
+            {r.aciklama && <div style={{ fontSize: 12, color: C.smoke, marginBottom: 8 }}>{r.aciklama}</div>}
+            {r.foto_urls?.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                {r.foto_urls.map((p, i) => <img key={i} src={p} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6, border: `1px solid ${C.border}` }} />)}
+              </div>
+            )}
+
+            {editingId === r.id ? (
+              <div style={{ background: C.panel, borderRadius: 8, padding: 12, marginBottom: 8, display: "grid", gap: 8 }}>
+                <input style={inpStyle} value={editForm.baslik} onChange={e => setEditForm(f => ({ ...f, baslik: e.target.value }))} placeholder="Başlık" />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={inpStyle} value={editForm.fiyat} onChange={e => setEditForm(f => ({ ...f, fiyat: e.target.value }))} placeholder="Fiyat" />
+                  <select style={{ ...inpStyle, cursor: "pointer" }} value={editForm.kategori} onChange={e => setEditForm(f => ({ ...f, kategori: e.target.value }))}>
+                    <option value="">Kategori seç</option>
+                    <option value="makine">Makine</option>
+                    <option value="atasman">Ataşman</option>
+                    <option value="parca">Yedek Parça</option>
+                  </select>
+                </div>
+                <textarea style={{ ...inpStyle, minHeight: 60 }} value={editForm.aciklama} onChange={e => setEditForm(f => ({ ...f, aciklama: e.target.value }))} placeholder="Açıklama" />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => saveEdit(r.id)} disabled={busyId === r.id} style={bs(C.green, C.onAccent)}>💾 Kaydet</button>
+                  <button onClick={() => setEditingId(null)} style={ob(C.smoke)}>Vazgeç</button>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {r.onay_durumu !== "yayinda" && <button onClick={() => setStatus(r.id, "yayinda")} disabled={busyId === r.id} style={bs(C.green, C.onAccent)}>✓ Onayla</button>}
+              {r.onay_durumu !== "reddedildi" && <button onClick={() => setStatus(r.id, "reddedildi")} disabled={busyId === r.id} style={ob(C.rust)}>✕ Reddet</button>}
+              {(r.onay_durumu === "yayinda" || r.onay_durumu === "reddedildi") && <button onClick={() => setStatus(r.id, "bekliyor")} disabled={busyId === r.id} style={ob(C.smoke)}>↺ Yayından Kaldır</button>}
+              <button onClick={() => startEdit(r)} style={ob(C.blue)}>✏ Düzenle</button>
+              <a href={`https://gndmachinery.com/pazar.html?id=${r.id}`} target="_blank" rel="noreferrer" style={{ ...ob(C.smoke), textDecoration: "none" }}>🔗 İlanı Aç</a>
+              {convertedIds.includes(r.id)
+                ? <span style={pill(C.green)}>✓ Lead oluşturuldu</span>
+                : <button onClick={() => convertToLead(r)} disabled={busyId === r.id} style={bs(C.amber, C.onAccent)}>{busyId === r.id ? "⏳..." : "→ Lead'e Dönüştür"}</button>}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1500,6 +1743,7 @@ export default function GNDOS() {
         {active==="companies"&&<CompaniesModul/>}
         {active==="campaigns"&&<CampaignCenter/>}
         {active==="queue"&&<SendQueue user={user}/>}
+        {active==="marketplace"&&<MarketplaceAdmin user={user}/>}
         {active==="ai"&&<AICopilot leads={leads}/>}
         {active==="makine"&&<SimpleModule title="🏗️ Equipment Center" content="Makine kataloğu yakında aktif olacak"/>}
         {active==="stok"&&<SimpleModule title="📦 Inventory" content="Stok yönetimi yakında aktif olacak"/>}
