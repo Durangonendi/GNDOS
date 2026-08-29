@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/send-email.js": {
+      "regions": ["fra1"]
+    },
+    "api/ai.js": {
+      "regions": ["fra1"]
+    }
+  }
+}
