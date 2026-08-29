@@ -275,6 +275,7 @@ const ULKELER = {
 const MODULES = [
   {key:"crm",icon:"🌍",label:"Global CRM"},
   {key:"companies",icon:"🏢",label:"Companies"},
+  {key:"contacts",icon:"👤",label:"Contacts"},
   {key:"campaigns",icon:"📣",label:"Campaigns"},
   {key:"queue",icon:"📤",label:"Send Queue"},
   {key:"import",icon:"📥",label:"Import Center"},
@@ -1319,6 +1320,74 @@ function CompanyDetail({ companyId, onClose, user }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── CONTACTS (Faz 9 — kisi bazli gorunum, contact_methods mimarisini korur) ───
+function ContactsModul({ user }) {
+  const [rowsData, setRowsData] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [companyDetailId, setCompanyDetailId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const token = await authToken();
+    if (!token) { setLoading(false); return; }
+    const from = page * PAGE_SIZE, to = from + PAGE_SIZE - 1;
+    let url = `${SUPABASE_URL}/rest/v1/contacts?select=id,person_name,role,status,last_contact_at,last_contact_channel,followup_date,company_id,companies(id,name_original,country),contact_methods(type,value_original)&order=id.desc`;
+    if (statusFilter) url += `&status=eq.${encodeURIComponent(statusFilter)}`;
+    if (search.trim()) url += `&or=(person_name.ilike.*${encodeURIComponent(search)}*,companies.name_searchable.ilike.*${encodeURIComponent(nameSearchable(search))}*)`;
+    const res = await fetch(url, { headers: { ...authHeaders(token), Range: `${from}-${to}`, Prefer: "count=exact" } });
+    const data = await res.json();
+    const range = res.headers.get("Content-Range");
+    setTotal(range ? Number(range.split("/")[1]) : data.length);
+    setRowsData(Array.isArray(data) ? data : []);
+    setLoading(false);
+  }, [page, search, statusFilter]);
+  useEffect(() => { load(); }, [load]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <input style={{ ...inpStyle, width: 240 }} placeholder="🔍 Kişi veya firma ara..." value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} />
+        <select style={{ ...inpStyle, width: 180, cursor: "pointer" }} value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(0); }}>
+          <option value="">Tüm durumlar</option>
+          <option value="Gönderilmedi">Gönderilmedi</option>
+          {FOLLOWUP_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <span style={{ fontSize: 12, color: C.smoke }}>{total} kişi · sayfa {page + 1}/{pageCount}</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={bs(page === 0 ? C.border : C.amber, page === 0 ? C.smoke : C.onAccent)}>← Önceki</button>
+          <button onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={page >= pageCount - 1} style={bs(page >= pageCount - 1 ? C.border : C.amber, page >= pageCount - 1 ? C.smoke : C.onAccent)}>Sonraki →</button>
+        </div>
+      </div>
+
+      {loading ? <div style={{ color: C.smoke, padding: 20 }}>Yükleniyor...</div> : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead><tr>{["KİŞİ", "FİRMA", "ÜLKE", "İLETİŞİM", "DURUM", "SON İLETİŞİM", "TAKİP"].map(h => <th key={h} style={{ background: C.panel, color: C.smoke, padding: "9px 12px", textAlign: "left", fontSize: 11, borderBottom: `1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
+            <tbody>{rowsData.map(r => (
+              <tr key={r.id} onClick={() => setCompanyDetailId(r.company_id)} style={{ cursor: "pointer" }}>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}`, fontWeight: 700 }}>{r.person_name || "(isimsiz)"}</td>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}` }}>{r.companies?.name_original || "—"}</td>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}`, color: C.smoke }}>{r.companies?.country || "—"}</td>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}`, color: C.smoke }}>{(r.contact_methods || []).map(m => m.value_original).join(", ") || "—"}</td>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}` }}><span style={pill(r.status === "Gönderilmedi" ? C.smoke : r.status === "Cevap geldi" ? C.green : C.amber)}>{r.status}</span></td>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}`, color: C.smoke }}>{r.last_contact_at ? new Date(r.last_contact_at).toLocaleDateString("tr-TR") : "—"}</td>
+                <td style={{ padding: "9px 12px", borderBottom: `1px solid ${C.border}`, color: C.smoke }}>{r.followup_date || "—"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {companyDetailId && <CompanyDetail companyId={companyDetailId} onClose={() => setCompanyDetailId(null)} user={user} />}
     </div>
   );
 }
@@ -2528,6 +2597,7 @@ export default function GNDOS() {
         {active==="crm"&&<CRMModul leads={leads} loadLeads={loadLeads} user={user}/>}
         {active==="import"&&<ImportCenter user={user}/>}
         {active==="companies"&&<CompaniesModul user={user}/>}
+        {active==="contacts"&&<ContactsModul user={user}/>}
         {active==="campaigns"&&<CampaignCenter/>}
         {active==="queue"&&<SendQueue user={user}/>}
         {active==="marketplace"&&<MarketplaceAdmin user={user}/>}
