@@ -409,27 +409,23 @@ function LeadFormModal({ editLead, onClose, onSave }) {
 
 // ─── WORLD MAP ────────────────────────────────────────────────────────────────
 function WorldMap({ leads }) {
-  const toX = lng => ((lng+180)/360)*860;
-  const toY = lat => ((90-lat)/180)*400;
+  const toXPct = lng => ((lng+180)/360)*100;
+  const toYPct = lat => ((90-lat)/180)*100;
   const stageColor = {"Lead":C.smoke,"İletişime Geçildi":C.blue,"Teklif Verildi":C.amber,"Müzakere":C.orange,"Kazanıldı":C.green,"Kaybedildi":C.rust};
   return (
     <div style={{...cardSt({padding:20,marginBottom:20})}}>
       <div style={{fontSize:12,fontWeight:700,color:C.amber,letterSpacing:1,marginBottom:12}}>🗺️ GLOBAL OPERASYON HARİTASI</div>
-      <div style={{background:"#060E18",borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`}}>
-        <svg viewBox="0 0 860 400" style={{width:"100%",display:"block"}}>
-          <rect width="860" height="400" fill="#060E18"/>
-          <path d="M90,65 L175,60 L190,85 L205,125 L190,165 L170,195 L150,210 L135,230 L115,225 L95,200 L80,170 L75,130 L80,95 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          <path d="M170,245 L205,235 L220,265 L225,305 L215,355 L195,385 L175,390 L155,370 L145,330 L145,290 L155,258 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          <path d="M390,55 L450,50 L465,70 L455,95 L440,105 L420,110 L405,100 L390,85 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          <path d="M405,115 L460,110 L480,135 L490,185 L485,245 L470,305 L445,330 L420,330 L400,305 L390,255 L385,195 L390,150 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          <path d="M460,50 L640,45 L690,65 L710,95 L700,135 L670,155 L630,160 L590,150 L550,140 L510,130 L480,110 L465,85 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          <path d="M480,125 L530,120 L545,140 L540,170 L515,180 L490,170 L478,150 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          <path d="M640,220 L710,215 L735,240 L740,280 L720,305 L680,310 L650,290 L630,260 L630,235 Z" fill="#0F2035" stroke="#162030" strokeWidth="0.5"/>
-          {leads.filter(l=>l.lat&&l.lng).map(l => {
-            const x=toX(l.lng), y=toY(l.lat), color=stageColor[l.stage]||C.smoke;
-            return (<g key={l.id}><circle cx={x} cy={y} r="10" fill={color} opacity="0.15"/><circle cx={x} cy={y} r="5" fill={color} opacity="0.6"/><circle cx={x} cy={y} r="3" fill={color}/></g>);
-          })}
-        </svg>
+      <div style={{position:"relative",borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`}}>
+        <img src="/hero-cover.jpg" alt="GND İş Makineleri" style={{width:"100%",display:"block"}}/>
+        {leads.filter(l=>l.lat&&l.lng).map(l => {
+          const color=stageColor[l.stage]||C.smoke;
+          return (
+            <div key={l.id} style={{position:"absolute",left:`${toXPct(l.lng)}%`,top:`${toYPct(l.lat)}%`,transform:"translate(-50%,-50%)"}}>
+              <div style={{width:16,height:16,borderRadius:"50%",background:color,opacity:0.25,position:"absolute",left:-3,top:-3}}/>
+              <div style={{width:8,height:8,borderRadius:"50%",background:color,border:"1.5px solid #fff"}}/>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
