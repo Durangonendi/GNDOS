@@ -838,13 +838,21 @@ async function marketRequestToLead(row, user, token, setNote) {
   const lData = await lRes.json();
   if (!lRes.ok) throw new Error(JSON.stringify(lData));
 
-  await writeAudit(token, user, "lead_created", "leads", lData[0]?.id, null, { source: "marketplace_listing", market_request_id: row.id });
+  const leadId = lData[0]?.id;
+  await writeAudit(token, user, "lead_created", "leads", leadId, null, { source: "marketplace_listing", market_request_id: row.id });
   await fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
     method: "POST",
     headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
     body: JSON.stringify({ company_id: companyId, contact_id: contactId, action: "lead_created", channel: "marketplace", result: "ok", actor_user_id: user?.id || null, metadata: { market_request_id: row.id } }),
   });
-  return companyId;
+  // Donusumu kalici olarak isaretle — bu olmadan sayfa yenilenince ayni ilan
+  // tekrar "Lead'e Donustur" gosteriyor ve mukerrer lead olusma riski var.
+  await fetch(`${SUPABASE_URL}/rest/v1/market_requests?id=eq.${row.id}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(token), "Content-Type": "application/json", "Prefer": "return=minimal" },
+    body: JSON.stringify({ converted_lead_id: leadId }),
+  });
+  return { companyId, leadId };
 }
 
 function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
@@ -857,7 +865,6 @@ function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [busyId, setBusyId] = useState(null);
-  const [convertedIds, setConvertedIds] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true); setErrorMsg("");
@@ -923,8 +930,8 @@ function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
     setBusyId(row.id);
     const token = await authToken();
     try {
-      await marketRequestToLead(row, user, token);
-      setConvertedIds(prev => [...prev, row.id]);
+      const { leadId } = await marketRequestToLead(row, user, token);
+      setRows(prev => prev.map(r => r.id === row.id ? { ...r, converted_lead_id: leadId } : r));
     } catch (e) { console.error("Lead oluşturma hatası:", e); alert("Lead oluşturulamadı. Tekrar deneyin."); }
     setBusyId(null);
   }
@@ -1010,7 +1017,7 @@ function MarketplaceAdmin({ user, setActive, setCompanyDetailId }) {
               {(r.onay_durumu === "yayinda" || r.onay_durumu === "reddedildi") && <button onClick={() => setStatus(r.id, "bekliyor")} disabled={busyId === r.id} style={ob(C.smoke)}>↺ Yayından Kaldır</button>}
               <button onClick={() => startEdit(r)} style={ob(C.blue)}>✏ Düzenle</button>
               <a href={`https://gndmachinery.com/pazar.html?id=${r.id}`} target="_blank" rel="noreferrer" style={{ ...ob(C.smoke), textDecoration: "none" }}>🔗 İlanı Aç</a>
-              {convertedIds.includes(r.id)
+              {r.converted_lead_id
                 ? <span style={pill(C.green)}>✓ Lead oluşturuldu</span>
                 : <button onClick={() => convertToLead(r)} disabled={busyId === r.id} style={bs(C.amber, C.onAccent)}>{busyId === r.id ? "⏳..." : "→ Lead'e Dönüştür"}</button>}
             </div>
